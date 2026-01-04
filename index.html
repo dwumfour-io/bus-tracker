@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixburgh Bus Tracker | Route 13</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#FFB81C">
+    <meta name="description" content="Real-time bus arrivals for Pittsburgh Port Authority routes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="PGH Bus">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23000' width='100' height='100' rx='20'/><text y='70' x='50' text-anchor='middle' font-size='60'>🚌</text></svg>">
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=1.0.5">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <span class="bus-icon">🚌</span>
+                    <h1>Pixburgh Bus Tracker</h1>
+                </div>
+                <div class="route-selector">
+                    <label for="route-select" class="sr-only">Select bus route</label>
+                    <select id="route-select" class="route-dropdown" aria-label="Select bus route">
+                        <option value="13" selected>Route 13</option>
+                        <option value="8">Route 8</option>
+                    </select>
+                </div>
+            </div>
+            <div class="stop-selector">
+                <span class="stop-icon" aria-hidden="true">📍</span>
+                <label for="stop-select" class="sr-only">Select bus stop</label>
+                <select id="stop-select" class="stop-dropdown" aria-label="Select bus stop">
+                    <option value="chalfonte" selected>Center Ave + Chalfonte Ave</option>
+                    <option value="westview">West View Plaza + Giant Eagle</option>
+                </select>
+            </div>
+            <div id="route-stop-warning" class="route-stop-warning" style="display: none;"></div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-label">Status:</span>
+                <span id="connection-status" class="status-value">Connecting...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Last Updated:</span>
+                <span id="last-updated" class="status-value">--:--:--</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Data Source:</span>
+                <span id="data-source" class="status-value">--</span>
+            </div>
+        </div>
+
+        <!-- Service Alerts Banner -->
+        <div id="alerts-container" class="alerts-container" style="display: none;">
+            <div class="alerts-header">
+                <span class="alerts-icon">⚠️</span>
+                <span class="alerts-title">Service Alerts</span>
+                <button id="alerts-toggle" class="alerts-toggle">Hide</button>
+            </div>
+            <div id="alerts-list" class="alerts-list"></div>
+        </div>
+
+        <!-- Auto-refresh Toggle -->
+        <div class="controls">
+            <label class="toggle-switch">
+                <input type="checkbox" id="auto-refresh" checked>
+                <span class="slider"></span>
+                <span class="toggle-label">Auto-refresh (30s)</span>
+            </label>
+            <button id="refresh-btn" class="btn-primary">🔄 Refresh Now</button>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="both">Both Directions</button>
+            <button class="tab-btn" data-tab="westview">To West View Plaza</button>
+            <button class="tab-btn" data-tab="downtown">To Dahntahn</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div id="tab-both" class="tab-content active">
+            <div class="directions-grid">
+                <!-- West View Column -->
+                <div class="direction-section">
+                    <div class="direction-header westview">
+                        <h2>To West View Plaza</h2>
+                        <p class="destination">West View Plaza Fire Lane + Giant Eagle</p>
+                    </div>
+                    <div id="westview-arrivals" class="arrivals-list">
+                        <div class="loading">Loading arrivals...</div>
+                    </div>
+                </div>
+
+                <!-- Downtown Column -->
+                <div class="direction-section">
+                    <div class="direction-header downtown">
+                        <h2>To Dahntahn</h2>
+                        <p class="destination">Downtown Pittsburgh</p>
+                    </div>
+                    <div id="downtown-arrivals" class="arrivals-list">
+                        <div class="loading">Loading arrivals...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-westview" class="tab-content">
+            <div class="direction-section single">
+                <div class="direction-header westview">
+                    <h2>To West View Plaza</h2>
+                    <p class="destination">West View Plaza Fire Lane + Giant Eagle</p>
+                </div>
+                <div id="westview-arrivals-single" class="arrivals-list">
+                    <div class="loading">Loading arrivals...</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-downtown" class="tab-content">
+            <div class="direction-section single">
+                <div class="direction-header downtown">
+                    <h2>To Dahntahn</h2>
+                    <p class="destination">Downtown Pittsburgh</p>
+                </div>
+                <div id="downtown-arrivals-single" class="arrivals-list">
+                    <div class="loading">Loading arrivals...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Section -->
+        <div class="info-section">
+            <h3>ℹ️ About This Tracker, Yinz</h3>
+            <p>Real-time arrival predictions for Pittsburgh Port Authority Route 13 at Center Ave + Chalfonte Ave. Made with gumption for Pittsburgh folks! 🏢</p>
+            <div class="info-grid">
+                <div class="info-item">
+                    <strong>Data Sources:</strong>
+                    <ul>
+                        <li>TrueTime API (Primary)</li>
+                        <li>GTFS-RT Feed (Secondary)</li>
+                        <li>Mock Data (Demo/Testing)</li>
+                    </ul>
+                </div>
+                <div class="info-item">
+                    <strong>API Endpoints:</strong>
+                    <ul>
+                        <li><code>/predictions</code> - All arrivals</li>
+                        <li><code>/predictions/westview</code> - West View only</li>
+                        <li><code>/predictions/downtown</code> - Downtown only</li>
+                    </ul>
+                </div>
+            </div>
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 2px solid var(--gray-medium); font-size: 0.95rem;">
+                <strong>Pittsburghese Dictionary:</strong><br>
+                <small>Yinz (you all) • Dahntahn (Downtown) • Gumption (determination) • Jaggy (sharp/jagged) • Nebby (nosy) • Mon (man/dude) • Jeet? (Did you eat?)</small>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>Made with ❤️ for Pittsburgh | <a href="https://github.com/dwumfour-io/dev-toolkit/tree/main/bus-tracker" target="_blank">View on GitHub</a></p>
+            <p class="footer-note">Data provided by Pittsburgh Port Authority TrueTime API</p>
+        </div>
+    </footer>
+
+    <script src="app.js?v=1.0.8"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+services:
+  bus-tracker:
+    build: .
+    container_name: bus-tracker-api
+    ports:
+      - "5001:5001"
+    environment:
+      - PAAC_API_KEY=${PAAC_API_KEY}
+      - BUS_ROUTE=${BUS_ROUTE:-13}
+      - STOP_ID=${STOP_ID:-1016}
+      - STOP_NAME=${STOP_NAME:-Center Ave + Chalfonte Ave}
+      - API_PORT=5001
+      - FLASK_DEBUG=false
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Optional: Add resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.5'
+    #       memory: 512M
+    #     reservations:
+    #       cpus: '0.25'
+    #       memory: 256M

@@ -1,0 +1,21 @@
+{
+  "name": "Pittsburgh Bus Tracker",
+  "short_name": "PGH Bus",
+  "description": "Real-time bus arrivals for Pittsburgh Port Authority routes",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#FFB81C",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23000' width='100' height='100' rx='20'/><text y='70' x='50' text-anchor='middle' font-size='60'>🚌</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["transportation", "utilities"],
+  "lang": "en-US",
+  "dir": "ltr"
+}
