@@ -9,7 +9,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import requests
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import os
 import logging
 from dotenv import load_dotenv
@@ -112,8 +112,8 @@ ROUTE_HEADWAYS = {
         "early": {"start": 5, "end": 6, "headway": 20},     # Early morning: every 20 min
         "peak": {"start": 6, "end": 9, "headway": 20},      # AM rush: every 20 min
         "midday": {"start": 9, "end": 14, "headway": 37},   # Midday: every 37 min
-        "pm_peak": {"start": 14, "end": 18, "headway": 20}, # PM rush: every 20 min
-        "evening": {"start": 18, "end": 22, "headway": 37}, # Evening: every 37 min
+        "pm_peak": {"start": 14, "end": 18, "headway": 20},  # PM rush: every 20 min
+        "evening": {"start": 18, "end": 22, "headway": 37},  # Evening: every 37 min
         "night": {"start": 22, "end": 5, "headway": 37},    # Night: every 37-60 min
     },
     "8": {
