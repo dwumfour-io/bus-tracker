@@ -159,6 +159,7 @@ body {
     background-size: 14px;
     padding-right: 35px;
     min-width: 250px;
+    max-width: 100%;
 }
 
 .stop-dropdown:hover {
@@ -191,6 +192,20 @@ body {
     font-size: 1.125rem;
     font-weight: 600;
     opacity: 0.95;
+}
+
+.stop-number-display {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 8px;
+    margin-left: 33px;
+    padding: 4px 10px;
+    border: 1px solid rgba(255, 184, 28, 0.55);
+    border-radius: var(--border-radius);
+    color: var(--yellow);
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0;
 }
 
 /* Main Content */
@@ -389,9 +404,30 @@ main {
 }
 
 .direction-header h2 {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
     font-weight: 700;
     font-size: 1.5rem;
     margin-bottom: 4px;
+}
+
+.direction-stop-number {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 3px 9px;
+    border-radius: var(--border-radius);
+    background-color: rgba(0, 0, 0, 0.12);
+    font-size: 0.85rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.direction-header.downtown .direction-stop-number {
+    background-color: rgba(255, 184, 28, 0.18);
+    color: var(--yellow);
 }
 
 .destination {
@@ -734,6 +770,19 @@ main {
     .route-badge {
         font-size: 1rem;
         padding: 6px 16px;
+    }
+
+    .stop-selector {
+        align-items: flex-start;
+    }
+
+    .stop-dropdown {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .stop-number-display {
+        margin-left: 0;
     }
 
     .status-bar {

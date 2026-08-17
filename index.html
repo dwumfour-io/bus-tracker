@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=1.0.5">
+    <link rel="stylesheet" href="style.css?v=1.0.6">
 </head>
 <body>
     <!-- Header -->
@@ -40,10 +40,11 @@
                 <span class="stop-icon" aria-hidden="true">📍</span>
                 <label for="stop-select" class="sr-only">Select bus stop</label>
                 <select id="stop-select" class="stop-dropdown" aria-label="Select bus stop">
-                    <option value="chalfonte" selected>Center Ave + Chalfonte Ave</option>
-                    <option value="westview">West View Plaza + Giant Eagle</option>
+                    <option value="chalfonte" selected>Center Ave + Chalfonte Ave (#1009 / #1016)</option>
+                    <option value="westview">West View Plaza + Giant Eagle (#619)</option>
                 </select>
             </div>
+            <div id="stop-number-display" class="stop-number-display" aria-live="polite">Stops #1009 / #1016</div>
             <div id="route-stop-warning" class="route-stop-warning" style="display: none;"></div>
         </div>
     </header>
@@ -99,7 +100,10 @@
                 <!-- West View Column -->
                 <div class="direction-section">
                     <div class="direction-header westview">
-                        <h2>To West View Plaza</h2>
+                        <h2>
+                            To West View Plaza
+                            <span class="direction-stop-number" data-stop-number="to_west_view">Stop #1009</span>
+                        </h2>
                         <p class="destination">West View Plaza Fire Lane + Giant Eagle</p>
                     </div>
                     <div id="westview-arrivals" class="arrivals-list">
@@ -110,7 +114,10 @@
                 <!-- Downtown Column -->
                 <div class="direction-section">
                     <div class="direction-header downtown">
-                        <h2>To Dahntahn</h2>
+                        <h2>
+                            To Dahntahn
+                            <span class="direction-stop-number" data-stop-number="to_downtown">Stop #1016</span>
+                        </h2>
                         <p class="destination">Downtown Pittsburgh</p>
                     </div>
                     <div id="downtown-arrivals" class="arrivals-list">
@@ -123,7 +130,10 @@
         <div id="tab-westview" class="tab-content">
             <div class="direction-section single">
                 <div class="direction-header westview">
-                    <h2>To West View Plaza</h2>
+                    <h2>
+                        To West View Plaza
+                        <span class="direction-stop-number" data-stop-number="to_west_view">Stop #1009</span>
+                    </h2>
                     <p class="destination">West View Plaza Fire Lane + Giant Eagle</p>
                 </div>
                 <div id="westview-arrivals-single" class="arrivals-list">
@@ -135,7 +145,10 @@
         <div id="tab-downtown" class="tab-content">
             <div class="direction-section single">
                 <div class="direction-header downtown">
-                    <h2>To Dahntahn</h2>
+                    <h2>
+                        To Dahntahn
+                        <span class="direction-stop-number" data-stop-number="to_downtown">Stop #1016</span>
+                    </h2>
                     <p class="destination">Downtown Pittsburgh</p>
                 </div>
                 <div id="downtown-arrivals-single" class="arrivals-list">
@@ -176,11 +189,11 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="container">
-            <p>Made with ❤️ for Pittsburgh | <a href="https://github.com/dwumfour-io/dev-toolkit/tree/main/bus-tracker" target="_blank">View on GitHub</a></p>
+            <p>Made with ❤️ for Pittsburgh | <a href="https://github.com/dwumfour-io/bus-tracker" target="_blank">View on GitHub</a></p>
             <p class="footer-note">Data provided by Pittsburgh Port Authority TrueTime API</p>
         </div>
     </footer>
 
-    <script src="app.js?v=1.0.8"></script>
+    <script src="app.js?v=1.0.9"></script>
 </body>
 </html>

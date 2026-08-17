@@ -86,6 +86,10 @@ class TestTrueTimeResponseFormatting:
         
         assert result is not None
         assert result["route"] == "13"
+        assert result["stop_number"] == "1016"
+        assert result["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
+        assert result["predictions"]["to_west_view"]["stop_number"] == "1009"
+        assert result["predictions"]["to_downtown"]["stop_number"] == "1016"
         assert result["predictions"]["to_west_view"]["arrivals"] == []
         assert result["predictions"]["to_downtown"]["arrivals"] == []
     
@@ -114,6 +118,7 @@ class TestTrueTimeResponseFormatting:
         result = _format_truetime_response(data, "13", "1016")
         
         assert result is not None
+        assert result["stop_number"] == "1016"
         assert len(result["predictions"]["to_downtown"]["arrivals"]) == 1
         assert len(result["predictions"]["to_west_view"]["arrivals"]) == 1
         
@@ -137,7 +142,9 @@ class TestTrueTimeResponseFormatting:
         result_619 = _format_truetime_response(data, "8", "619")
         
         assert result_1016["stop_name"] == "Center Ave + Chalfonte Ave"
+        assert result_1016["stop_number"] == "1016"
         assert result_619["stop_name"] == "West View Plaza + Giant Eagle"
+        assert result_619["stop_number"] == "619"
 
 
 class TestAPIEndpoints:
@@ -176,15 +183,22 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["route"] == "13"
+        assert data["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
+        assert data["predictions"]["to_west_view"]["stop_number"] == "1009"
+        assert data["predictions"]["to_downtown"]["stop_number"] == "1016"
         assert "predictions" in data
     
-    @patch('api.get_predictions_truetime')
-    def test_predictions_endpoint_failure(self, mock_truetime, client):
-        """Predictions endpoint should return 503 on failure"""
-        mock_truetime.return_value = None
+    @patch('api.get_predictions_with_fallback')
+    def test_predictions_endpoint_empty(self, mock_predictions, client):
+        """Predictions endpoint should return empty arrivals when no buses are available"""
+        mock_predictions.return_value = None
         
         response = client.get('/predictions?route=13&stop=1016')
-        assert response.status_code == 503
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
+        assert data["predictions"]["to_west_view"]["arrivals"] == []
+        assert data["predictions"]["to_downtown"]["arrivals"] == []
     
     @patch('api.requests.get')
     def test_alerts_endpoint(self, mock_get, client):

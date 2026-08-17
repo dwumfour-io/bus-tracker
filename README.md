@@ -9,11 +9,11 @@ Real-time bus arrival tracker for Pittsburgh Port Authority buses using the True
 
 ## 📍 Supported Routes & Stops
 
-| Route | Stop | Stop Name |
-|-------|------|-----------|
-| 13 | chalfonte | Center Ave + Chalfonte Ave |
-| 13 | westview | West View Plaza + Giant Eagle |
-| 8 | westview | West View Plaza + Giant Eagle |
+| Route | Stop | Stop Name | Stop Number(s) |
+|-------|------|-----------|----------------|
+| 13 | chalfonte | Center Ave + Chalfonte Ave | 1009 / 1016 |
+| 13 | westview | West View Plaza + Giant Eagle | 619 |
+| 8 | westview | West View Plaza + Giant Eagle | 619 |
 
 **Destinations Tracked:**
 - ➡️ **West View:** West View Plaza Fire Lane + Giant Eagle
@@ -78,6 +78,7 @@ docker-compose up -d
 ```json
 {
   "stop_name": "Center Ave + Chalfonte Ave",
+  "stop_numbers": {"outbound": "1009", "inbound": "1016"},
   "route": "13",
   "last_updated": "06:15:32 PM",
   "data_source": "truetime",
@@ -109,6 +110,8 @@ docker-compose up -d
 ```json
 {
   "stop_name": "West View Plaza + Giant Eagle",
+  "stop_number": "619",
+  "stop_numbers": {"outbound": "619", "inbound": "619"},
   "routes": ["8", "13"],
   "is_terminus": true,
   "predictions": {

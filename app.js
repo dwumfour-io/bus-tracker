@@ -1,6 +1,6 @@
 // Pittsburgh Bus Tracker - Main JavaScript
-const API_URL = window.location.protocol === 'file:' 
-    ? 'http://localhost:5001' 
+const API_URL = window.location.protocol === 'file:'
+    ? 'http://localhost:5001'
     : window.location.origin; // Use localhost when opened as file, relative URL for production
 const REFRESH_INTERVAL = 30000; // 30 seconds
 
@@ -8,6 +8,17 @@ let autoRefreshInterval = null;
 let currentData = null;
 let currentRoute = '13';
 let currentStop = 'chalfonte';
+
+const stopMetadata = {
+    chalfonte: {
+        name: 'Center Ave + Chalfonte Ave',
+        numbers: { outbound: '1009', inbound: '1016' }
+    },
+    westview: {
+        name: 'West View Plaza + Giant Eagle',
+        numbers: { outbound: '619', inbound: '619' }
+    }
+};
 
 // Route-stop compatibility mapping
 // Route 8 only serves West View Plaza
@@ -17,13 +28,48 @@ const routeStopCompatibility = {
     '13': ['chalfonte', 'westview']  // Route 13: Center Ave, West View
 };
 
+function formatStopNumbers(stopNumbers) {
+    if (!stopNumbers) return '';
+    const outbound = stopNumbers.outbound;
+    const inbound = stopNumbers.inbound;
+
+    if (outbound && inbound && outbound !== inbound) {
+        return `Stops #${outbound} / #${inbound}`;
+    }
+
+    const stopNumber = outbound || inbound;
+    return stopNumber ? `Stop #${stopNumber}` : '';
+}
+
+function updateStopNumberDisplay(stopNumbers = null) {
+    const display = document.getElementById('stop-number-display');
+    if (!display) return;
+
+    const numbers = stopNumbers || stopMetadata[currentStop]?.numbers;
+    display.textContent = formatStopNumbers(numbers);
+}
+
+function updateDirectionStopNumbers(predictions = null) {
+    const fallbackNumbers = stopMetadata[currentStop]?.numbers || {};
+    const stopNumbers = {
+        to_west_view: predictions?.to_west_view?.stop_number || fallbackNumbers.outbound,
+        to_downtown: predictions?.to_downtown?.stop_number || fallbackNumbers.inbound
+    };
+
+    Object.entries(stopNumbers).forEach(([direction, stopNumber]) => {
+        document.querySelectorAll(`[data-stop-number="${direction}"]`).forEach((element) => {
+            element.textContent = stopNumber ? `Stop #${stopNumber}` : '';
+        });
+    });
+}
+
 // Register Service Worker for PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/service-worker.js')
             .then((registration) => {
                 // Service Worker registered successfully
-                
+
                 // Check for updates
                 registration.addEventListener('updatefound', () => {
                     const newWorker = registration.installing;
@@ -47,6 +93,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeRouteSelector();
     initializeStopSelector();
     checkRouteStopCompatibility();
+    updateStopNumberDisplay();
+    updateDirectionStopNumbers();
     fetchPredictions();
     fetchServiceAlerts();
     startAutoRefresh();
@@ -56,45 +104,51 @@ document.addEventListener('DOMContentLoaded', () => {
 function checkRouteStopCompatibility() {
     const compatibleStops = routeStopCompatibility[currentRoute] || [];
     const isCompatible = compatibleStops.includes(currentStop);
-    
+
     const warningEl = document.getElementById('route-stop-warning');
     const stopSelect = document.getElementById('stop-select');
-    
+
     if (!isCompatible && compatibleStops.length > 0) {
         // Auto-switch to the first compatible stop
         const newStop = compatibleStops[0];
-        const oldStopName = currentStop === 'chalfonte' ? 'Center Ave + Chalfonte Ave' : 'West View Plaza + Giant Eagle';
-        const newStopName = newStop === 'chalfonte' ? 'Center Ave + Chalfonte Ave' : 'West View Plaza + Giant Eagle';
+        const oldStopName = stopMetadata[currentStop]?.name || currentStop;
+        const newStopName = stopMetadata[newStop]?.name || newStop;
         const routeName = currentRoute === '8' ? 'Route 8' : 'Route 13';
-        
+
         // Update the stop
         currentStop = newStop;
         stopSelect.value = newStop;
-        
+        updateStopNumberDisplay();
+        updateDirectionStopNumbers();
+
         // Show a brief notification about the switch
         warningEl.innerHTML = `ℹ️ Switched to ${newStopName} — ${routeName} doesn't serve ${oldStopName}`;
         warningEl.style.display = 'block';
-        
+
         // Hide the notification after 4 seconds
         setTimeout(() => {
             warningEl.style.display = 'none';
         }, 4000);
-        
+
         return true; // Now compatible after switch
     } else {
         warningEl.style.display = 'none';
+        updateStopNumberDisplay();
+        updateDirectionStopNumbers();
     }
-    
+
     return isCompatible;
 }
 
 // Route selector functionality
 function initializeRouteSelector() {
     const routeSelect = document.getElementById('route-select');
-    
+
     routeSelect.addEventListener('change', (e) => {
         currentRoute = e.target.value;
         checkRouteStopCompatibility();
+        updateStopNumberDisplay();
+        updateDirectionStopNumbers();
         fetchPredictions();
         fetchServiceAlerts(); // Fetch alerts for new route
     });
@@ -104,18 +158,20 @@ function initializeRouteSelector() {
 function initializeStopSelector() {
     const stopSelect = document.getElementById('stop-select');
     const routeSelect = document.getElementById('route-select');
-    
+
     stopSelect.addEventListener('change', (e) => {
         currentStop = e.target.value;
-        
+
         // Auto-switch to Route 13 when Center Ave + Chalfonte Ave is selected
         // (Route 8 doesn't serve this stop)
         if (currentStop === 'chalfonte' && currentRoute !== '13') {
             currentRoute = '13';
             routeSelect.value = '13';
         }
-        
+
         checkRouteStopCompatibility();
+        updateStopNumberDisplay();
+        updateDirectionStopNumbers();
         fetchPredictions();
     });
 }
@@ -191,30 +247,31 @@ async function fetchPredictions() {
         const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
         // Use multi-route endpoint at West View to show both Route 8 and 13
-        const endpoint = currentStop === 'westview' 
+        const endpoint = currentStop === 'westview'
             ? `${API_URL}/predictions/multi?stop=westview`
             : `${API_URL}/predictions?route=${currentRoute}&stop=${currentStop}`;
-        
+
         const response = await fetch(endpoint, { signal: controller.signal });
         clearTimeout(timeoutId);
-        
+
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             throw new ApiError(response.status, errorData.error || `Server error (${response.status})`);
         }
 
         const data = await response.json();
-        
+
         // Check for API-level errors
         if (data.error) {
             throw new ApiError(0, data.error);
         }
 
         currentData = data;
-        
+
         updateStatus('Connected', 'live');
         updateLastUpdated(data.last_updated);
         updateDataSource(data.data_source, data.is_live);
+        updateStopNumberDisplay(data.stop_numbers);
         renderArrivals(data);
 
     } catch (error) {
@@ -239,7 +296,7 @@ function updateLastUpdated(time) {
         second: '2-digit',
         hour12: true
     }).format(now);
-    
+
     document.getElementById('last-updated').textContent = estTime + ' EST';
 }
 
@@ -249,9 +306,9 @@ function updateDataSource(source, isLive) {
         'truetime': 'TrueTime API',
         'gtfs-rt': 'GTFS-RT Feed'
     };
-    
+
     sourceElement.textContent = sourceText[source] || source;
-    
+
     if (!isLive) {
         sourceElement.style.color = 'var(--warning)';
     } else {
@@ -264,6 +321,8 @@ function renderArrivals(data) {
     const westviewData = data.predictions.to_west_view;
     const downtownData = data.predictions.to_downtown;
     const expectedHeadway = data.expected_headway || null;
+
+    updateDirectionStopNumbers(data.predictions);
 
     // Check if at terminus (West View Plaza)
     const isAtWestView = currentStop === 'westview';
@@ -318,7 +377,7 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
                 </div>`;
             return;
         }
-        
+
         container.innerHTML = `
             <div class="arrival-card schedule-card">
                 <div class="minutes-display schedule-icon">
@@ -342,19 +401,19 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
 function createArrivalCard(arrival) {
     const statusClass = getStatusClass(arrival.status);
     const cardClass = statusClass === 'on-time' ? '' : statusClass;
-    
+
     // Show "Arriving Now" for buses less than 1 minute away
     const isApproaching = arrival.minutes < 1;
     const minutesDisplay = isApproaching ? 'Now' : arrival.minutes;
     const minutesLabel = isApproaching ? 'Arriving' : 'min';
     const approachingClass = isApproaching ? 'approaching' : '';
-    
+
     // Handle both field names: 'time' and 'arrival_time'
     const scheduledTime = arrival.time || arrival.arrival_time || 'N/A';
 
     // Show route number if available (for multi-route at West View)
     const routeLabel = arrival.route ? `Route ${arrival.route} • ` : '';
-    
+
     return `
         <div class="arrival-card ${cardClass} ${approachingClass}">
             <div class="minutes-display ${approachingClass}">
@@ -438,7 +497,7 @@ function showError(title = 'Unable to connect', subtitle = 'Check if the service
 // Visibility change detection (pause refresh when tab is hidden)
 document.addEventListener('visibilitychange', () => {
     const autoRefreshToggle = document.getElementById('auto-refresh');
-    
+
     if (document.hidden) {
         stopAutoRefresh();
     } else if (autoRefreshToggle.checked) {
@@ -452,7 +511,7 @@ async function fetchServiceAlerts() {
     try {
         const response = await fetch(`${API_URL}/alerts?route=${currentRoute}`);
         if (!response.ok) return;
-        
+
         const data = await response.json();
         renderAlerts(data.alerts || []);
     } catch (error) {
@@ -464,14 +523,14 @@ function renderAlerts(alerts) {
     const container = document.getElementById('alerts-container');
     const list = document.getElementById('alerts-list');
     const toggleBtn = document.getElementById('alerts-toggle');
-    
+
     if (!alerts || alerts.length === 0) {
         container.style.display = 'none';
         return;
     }
-    
+
     container.style.display = 'block';
-    
+
     list.innerHTML = alerts.map(alert => `
         <div class="alert-item">
             <div class="alert-item-title">
@@ -481,11 +540,11 @@ function renderAlerts(alerts) {
             <div class="alert-item-brief">${alert.brief || alert.detail}</div>
         </div>
     `).join('');
-    
+
     // Start collapsed by default
     list.classList.add('collapsed');
     toggleBtn.textContent = 'Show';
-    
+
     // Toggle functionality
     toggleBtn.onclick = () => {
         list.classList.toggle('collapsed');
