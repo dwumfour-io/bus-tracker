@@ -15,6 +15,7 @@ Real-time bus arrival tracker for Pittsburgh Port Authority buses using the True
 | 13 | stop_1016 | Center Ave + Chalfonte Ave | 1016 |
 | 13 | westview | West View Plaza + Giant Eagle | 619 |
 | 13 | stop_620 | Stop 620 | 620 |
+| 13 | stop_1020 | Stop 1020 | 1020 |
 | 13 | stop_618 | Stop 618 | 618 |
 | 8 | westview | West View Plaza + Giant Eagle | 619 |
 

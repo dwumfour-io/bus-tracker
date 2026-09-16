@@ -13,23 +13,33 @@ let currentStop = 'stop_618';
 const stopMetadata = {
     stop_1009: {
         name: 'Center Ave + Chalfonte Ave',
-        numbers: { outbound: '1009', inbound: '1009' }
+        numbers: { outbound: '1009', inbound: '1009' },
+        directions: ['to_west_view']
     },
     stop_1016: {
         name: 'Center Ave + Chalfonte Ave',
-        numbers: { outbound: '1016', inbound: '1016' }
+        numbers: { outbound: '1016', inbound: '1016' },
+        directions: ['to_downtown']
     },
     westview: {
         name: 'West View Plaza + Giant Eagle',
-        numbers: { outbound: '619', inbound: '619' }
+        numbers: { outbound: '619', inbound: '619' },
+        directions: ['to_west_view', 'to_downtown']
     },
     stop_620: {
         name: 'Stop 620',
-        numbers: { outbound: '620', inbound: '620' }
+        numbers: { outbound: '620', inbound: '620' },
+        directions: ['to_downtown']
+    },
+    stop_1020: {
+        name: 'Stop 1020',
+        numbers: { outbound: '1020', inbound: '1020' },
+        directions: ['to_downtown']
     },
     stop_618: {
         name: 'Stop 618',
-        numbers: { outbound: '618', inbound: '618' }
+        numbers: { outbound: '618', inbound: '618' },
+        directions: ['to_west_view']
     }
 };
 
@@ -38,7 +48,7 @@ const stopMetadata = {
 // Route 13 serves all stops
 const routeStopCompatibility = {
     '8': ['westview'],  // Route 8 only serves West View Plaza
-    '13': ['stop_618', 'westview', 'stop_620', 'stop_1009', 'stop_1016']  // Route 13 stop order
+    '13': ['stop_618', 'westview', 'stop_620', 'stop_1020', 'stop_1009', 'stop_1016']  // Route 13 stop order
 };
 
 function formatStopNumbers(stopNumbers) {
@@ -380,6 +390,7 @@ function renderArrivals(data) {
     const westviewData = data.predictions.to_west_view;
     const downtownData = data.predictions.to_downtown;
     const expectedHeadway = data.expected_headway || null;
+    const directions = data.directions || stopMetadata[currentStop]?.directions || [];
 
     updateDirectionStopNumbers(data.predictions);
 
@@ -387,12 +398,33 @@ function renderArrivals(data) {
     const isAtWestView = currentStop === 'westview';
 
     // Render for "Both Directions" tab
-    renderArrivalList('westview-arrivals', westviewData.arrivals, isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('westview-arrivals', westviewData.arrivals, directions.includes('to_west_view'), isAtWestView ? 'westview' : null, expectedHeadway);
     renderArrivalList('downtown-arrivals', downtownData.arrivals, null, expectedHeadway);
 
     // Render for individual tabs
-    renderArrivalList('westview-arrivals-single', westviewData.arrivals, isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('westview-arrivals-single', westviewData.arrivals, directions.includes('to_west_view'), isAtWestView ? 'westview' : null, expectedHeadway);
     renderArrivalList('downtown-arrivals-single', downtownData.arrivals, null, expectedHeadway);
+}
+
+function renderDirectionList(containerId, arrivals, isServed, terminus = null, expectedHeadway = null) {
+    if (!isServed) {
+        const container = document.getElementById(containerId);
+        container.innerHTML = `
+            <div class="arrival-card schedule-card">
+                <div class="minutes-display schedule-icon">
+                    <div class="minutes-number">↔</div>
+                    <div class="minutes-label">&nbsp;</div>
+                </div>
+                <div class="arrival-info">
+                    <h3>Downtown-bound stop</h3>
+                    <div class="arrival-time">West View service is not available at this stop.</div>
+                </div>
+                <div class="status-badge schedule">Not served</div>
+            </div>`;
+        return;
+    }
+
+    renderArrivalList(containerId, arrivals, terminus, expectedHeadway);
 }
 
 function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadway = null) {

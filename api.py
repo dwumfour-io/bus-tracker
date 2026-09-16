@@ -85,22 +85,32 @@ STOP_CONFIGS = {
     "stop_1009": {
         "name": "Center Ave + Chalfonte Ave",
         "numbers": {"outbound": "1009", "inbound": "1009"},
+        "directions": ["to_west_view"],
     },
     "stop_1016": {
         "name": "Center Ave + Chalfonte Ave",
         "numbers": {"outbound": "1016", "inbound": "1016"},
+        "directions": ["to_downtown"],
     },
     "westview": {
         "name": "West View Plaza + Giant Eagle",
         "numbers": {"outbound": "619", "inbound": "619"},
+        "directions": ["to_west_view", "to_downtown"],
     },
     "stop_620": {
         "name": "Stop 620",
         "numbers": {"outbound": "620", "inbound": "620"},
+        "directions": ["to_downtown"],
+    },
+    "stop_1020": {
+        "name": "Stop 1020",
+        "numbers": {"outbound": "1020", "inbound": "1020"},
+        "directions": ["to_downtown"],
     },
     "stop_618": {
         "name": "Stop 618",
         "numbers": {"outbound": "618", "inbound": "618"},
+        "directions": ["to_west_view"],
     },
 }
 VALID_STOPS = list(STOP_CONFIGS.keys())
@@ -189,6 +199,14 @@ def _get_stop_entries(stop, official_names=None):
     return entries
 
 
+def _get_stop_directions(stop):
+    """Return supported direction keys for a logical stop or public ID."""
+    stop_key = _resolve_stop_key(stop)
+    return STOP_CONFIGS.get(stop_key, {}).get(
+        "directions", ["to_west_view", "to_downtown"]
+    )
+
+
 def _get_official_stop_names(route, stop_ids):
     """Fetch official stop names without making metadata a prediction dependency."""
     requested_ids = {str(stop_id) for stop_id in stop_ids}
@@ -275,6 +293,7 @@ def _empty_predictions_response(stop_name, route, stop=None):
         "stop_name": stop_name,
         "stop_number": single_stop_number,
         "stop_numbers": stop_numbers,
+        "directions": _get_stop_directions(stop),
         "stops": _get_stop_entries(stop),
         "route": route,
         "last_updated": now_label,
@@ -438,6 +457,7 @@ def _format_truetime_response(data, route=None, stop=None):
             "stop_name": display_stop_name,
             "stop_number": selected_stop_number,
             "stop_numbers": stop_numbers,
+            "directions": _get_stop_directions(selected_stop),
             "stops": _get_stop_entries(selected_stop),
             "route": selected_route,
             "last_updated": now_label,
@@ -676,6 +696,7 @@ def _build_predictions_payload(route, requested_stop):
     # Combine results
     now_label = datetime.now(EASTERN_TZ).strftime("%I:%M:%S %p")
     stop_numbers = _get_stop_numbers(stop)
+    directions = STOP_CONFIGS[stop].get("directions", ["to_west_view", "to_downtown"])
     official_names = _get_official_stop_names(route, stop_numbers.values())
     stop_entries = _get_stop_entries(stop, official_names)
     outbound_name = stop_entries[0]["name"]
@@ -702,6 +723,7 @@ def _build_predictions_payload(route, requested_stop):
         "stop_name": outbound_name,
         "stop_number": _same_stop_number_label(stop_numbers),
         "stop_numbers": stop_numbers,
+        "directions": directions,
         "stops": stop_entries,
         "route": route,
         "last_updated": now_label,
