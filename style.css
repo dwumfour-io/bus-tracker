@@ -773,12 +773,31 @@ main {
     }
 
     .stop-selector {
-        align-items: flex-start;
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        align-items: center;
+        column-gap: 10px;
+        row-gap: 10px;
+    }
+
+    .stop-icon {
+        grid-column: 1;
+        grid-row: 1;
+        align-self: center;
+        text-align: center;
     }
 
     .stop-dropdown {
-        flex: 1;
+        grid-column: 2;
+        grid-row: 1;
+        width: 100%;
         min-width: 0;
+    }
+
+    #set-default-stop {
+        grid-column: 2;
+        grid-row: 2;
+        width: 100%;
     }
 
     .stop-number-display {
