@@ -7,7 +7,7 @@ const REFRESH_INTERVAL = 30000; // 30 seconds
 let autoRefreshInterval = null;
 let currentData = null;
 let currentRoute = '13';
-let currentStop = 'chalfonte';
+let currentStop = 'stop_618';
 
 const stopMetadata = {
     chalfonte: {
@@ -80,6 +80,18 @@ function updateDirectionStopNames(stops = []) {
     });
 }
 
+function updateDirectionStopNamesFromSelection() {
+    const selectedStop = stopMetadata[currentStop];
+    if (!selectedStop) return;
+
+    document.querySelectorAll('[data-stop-name="to_west_view"]').forEach((element) => {
+        element.textContent = `${selectedStop.name} (#${selectedStop.numbers.outbound})`;
+    });
+    document.querySelectorAll('[data-stop-name="to_downtown"]').forEach((element) => {
+        element.textContent = `${selectedStop.name} (#${selectedStop.numbers.inbound})`;
+    });
+}
+
 // Register Service Worker for PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -112,6 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
     checkRouteStopCompatibility();
     updateStopNumberDisplay();
     updateDirectionStopNumbers();
+    updateDirectionStopNamesFromSelection();
     fetchPredictions();
     fetchServiceAlerts();
     startAutoRefresh();
@@ -166,6 +179,7 @@ function initializeRouteSelector() {
         checkRouteStopCompatibility();
         updateStopNumberDisplay();
         updateDirectionStopNumbers();
+        updateDirectionStopNamesFromSelection();
         fetchPredictions();
         fetchServiceAlerts(); // Fetch alerts for new route
     });

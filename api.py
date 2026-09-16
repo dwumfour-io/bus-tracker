@@ -72,8 +72,8 @@ _stop_metadata_cache = {"expires_at": 0, "names": {}}
 
 # Bus 13 Configuration
 BUS_ROUTE = os.environ.get("BUS_ROUTE", "13")
-STOP_ID = os.environ.get("STOP_ID", "1016")  # Default to Center Ave + Chalfonte Ave
-STOP_NAME = os.environ.get("STOP_NAME", "Center Ave + Chalfonte Ave")
+STOP_ID = os.environ.get("STOP_ID", "618")  # Default to stop 618
+STOP_NAME = os.environ.get("STOP_NAME", "Stop 618")
 DESTINATION_WEST_VIEW = os.environ.get("DESTINATION_WEST_VIEW", "West View Plaza Fire Lane + Giant Eagle")
 DESTINATION_DOWNTOWN = os.environ.get("DESTINATION_DOWNTOWN", "Downtown Pittsburgh")
 
