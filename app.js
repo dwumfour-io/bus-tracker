@@ -3,6 +3,7 @@ const API_URL = window.location.protocol === 'file:'
     ? 'http://localhost:5001'
     : window.location.origin; // Use localhost when opened as file, relative URL for production
 const REFRESH_INTERVAL = 30000; // 30 seconds
+const DEFAULT_STOP_STORAGE_KEY = 'pixburgh-bus-tracker-default-stop';
 
 let autoRefreshInterval = null;
 let currentData = null;
@@ -117,6 +118,7 @@ if ('serviceWorker' in navigator) {
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
+    restoreDefaultStop();
     initializeTabs();
     initializeControls();
     initializeRouteSelector();
@@ -189,6 +191,15 @@ function initializeRouteSelector() {
 function initializeStopSelector() {
     const stopSelect = document.getElementById('stop-select');
     const routeSelect = document.getElementById('route-select');
+    const defaultStopButton = document.getElementById('set-default-stop');
+
+    defaultStopButton.addEventListener('click', () => {
+        localStorage.setItem(DEFAULT_STOP_STORAGE_KEY, currentStop);
+        defaultStopButton.textContent = 'Default saved';
+        setTimeout(() => {
+            defaultStopButton.textContent = 'Set as default';
+        }, 2000);
+    });
 
     stopSelect.addEventListener('change', (e) => {
         currentStop = e.target.value;
@@ -203,8 +214,17 @@ function initializeStopSelector() {
         checkRouteStopCompatibility();
         updateStopNumberDisplay();
         updateDirectionStopNumbers();
+        updateDirectionStopNamesFromSelection();
         fetchPredictions();
     });
+}
+
+function restoreDefaultStop() {
+    const savedStop = localStorage.getItem(DEFAULT_STOP_STORAGE_KEY);
+    if (savedStop && stopMetadata[savedStop]) {
+        currentStop = savedStop;
+        document.getElementById('stop-select').value = savedStop;
+    }
 }
 
 // Tab functionality
