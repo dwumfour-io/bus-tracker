@@ -90,9 +90,13 @@ STOP_CONFIGS = {
         "name": "West View Plaza + Giant Eagle",
         "numbers": {"outbound": "619", "inbound": "619"},
     },
-    "stops_620_618": {
-        "name": "Stops 620 / 618",
-        "numbers": {"outbound": "620", "inbound": "618"},
+    "stop_620": {
+        "name": "Stop 620",
+        "numbers": {"outbound": "620", "inbound": "620"},
+    },
+    "stop_618": {
+        "name": "Stop 618",
+        "numbers": {"outbound": "618", "inbound": "618"},
     },
 }
 VALID_STOPS = list(STOP_CONFIGS.keys())
