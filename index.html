@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=1.0.7">
+    <link rel="stylesheet" href="style.css?v=1.0.8">
 </head>
 <body>
     <!-- Header -->
@@ -38,18 +38,20 @@
             </div>
             <div class="stop-selector">
                 <span class="stop-icon" aria-hidden="true">📍</span>
-                <label for="stop-select" class="sr-only">Select bus stop</label>
-                <select id="stop-select" class="stop-dropdown" aria-label="Select bus stop">
-                    <option value="stop_618" selected>Stop 618</option>
-                    <option value="westview">West View Plaza + Giant Eagle (#619)</option>
-                    <option value="stop_620">Stop 620</option>
-                    <option value="stop_1020">Stop 1020</option>
-                    <option value="stop_1009">Center Ave + Chalfonte Ave (#1009)</option>
-                    <option value="stop_1016">Center Ave + Chalfonte Ave (#1016)</option>
-                </select>
-                <button id="set-default-stop" class="btn-primary" type="button">Set stop as default</button>
+                <div class="stop-control-stack">
+                    <label for="stop-select" class="sr-only">Select bus stop</label>
+                    <select id="stop-select" class="stop-dropdown" aria-label="Select bus stop">
+                        <option value="stop_618" selected>Stop 618</option>
+                        <option value="westview">West View Plaza + Giant Eagle (#619)</option>
+                        <option value="stop_620">Stop 620</option>
+                        <option value="stop_1020">Stop 1020</option>
+                        <option value="stop_1009">Center Ave + Chalfonte Ave (#1009)</option>
+                        <option value="stop_1016">Center Ave + Chalfonte Ave (#1016)</option>
+                    </select>
+                    <button id="set-default-stop" class="btn-primary" type="button">Set stop as default</button>
+                    <div id="stop-number-display" class="stop-number-display" aria-live="polite">Stop #618</div>
+                </div>
             </div>
-            <div id="stop-number-display" class="stop-number-display" aria-live="polite">Stop #618</div>
             <div id="route-stop-warning" class="route-stop-warning" style="display: none;"></div>
         </div>
     </header>

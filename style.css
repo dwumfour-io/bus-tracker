@@ -136,6 +136,15 @@ body {
     margin-top: 12px;
 }
 
+.stop-control-stack {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+
 .stop-icon {
     font-size: 1.25rem;
 }
@@ -197,8 +206,7 @@ body {
 .stop-number-display {
     display: inline-flex;
     align-items: center;
-    margin-top: 8px;
-    margin-left: 33px;
+    margin: 0;
     padding: 4px 10px;
     border: 1px solid rgba(255, 184, 28, 0.55);
     border-radius: var(--border-radius);
@@ -811,14 +819,19 @@ main {
         min-width: 0;
     }
 
-    #set-default-stop {
+    .stop-control-stack {
         grid-column: 2;
-        grid-row: 2;
+        grid-row: 1;
+        width: 100%;
+        align-items: stretch;
+    }
+
+    #set-default-stop {
         width: 100%;
     }
 
     .stop-number-display {
-        margin-left: 42px;
+        align-self: flex-start;
     }
 
     .status-bar {
@@ -904,10 +917,6 @@ main {
     #set-default-stop {
         padding: 12px 10px;
         font-size: 0.95rem;
-    }
-
-    .stop-number-display {
-        margin-left: 36px;
     }
 
     .arrival-card {
