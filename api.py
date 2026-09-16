@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timezone
 import os
 import logging
+import time
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from google.transit import gtfs_realtime_pb2
@@ -64,7 +65,10 @@ def add_security_headers(response):
 PAAC_API_KEY = os.environ.get("PAAC_API_KEY", "")
 TRUETIME_BASE_URL = "https://truetime.portauthority.org/bustime/api/v3"
 GTFSRT_TRIPS_URL = "https://truetime.portauthority.org/gtfsrt-bus/trips"
+TRUETIME_STOPS_URL = f"{TRUETIME_BASE_URL}/getstops"
 API_PORT = int(os.environ.get("API_PORT", 5001))
+STOP_METADATA_CACHE_TTL = 3600
+_stop_metadata_cache = {"expires_at": 0, "names": {}}
 
 # Bus 13 Configuration
 BUS_ROUTE = os.environ.get("BUS_ROUTE", "13")
@@ -154,18 +158,73 @@ def _get_stop_numbers(stop):
     return {"outbound": selected_stop, "inbound": selected_stop}
 
 
-def _get_stop_entries(stop):
+def _get_stop_entries(stop, official_names=None):
     """Return the physical stop records represented by a configured stop."""
     stop_numbers = _get_stop_numbers(stop)
     stop_name = _get_stop_name(stop)
+    official_names = official_names or {}
     entries = [
-        {"id": stop_numbers["outbound"], "name": stop_name, "direction": "OUTBOUND"},
+        {
+            "id": stop_numbers["outbound"],
+            "name": official_names.get(stop_numbers["outbound"], stop_name),
+            "direction": "OUTBOUND",
+        },
     ]
     if stop_numbers["inbound"] != stop_numbers["outbound"]:
-        entries.append({"id": stop_numbers["inbound"], "name": stop_name, "direction": "INBOUND"})
+        entries.append({
+            "id": stop_numbers["inbound"],
+            "name": official_names.get(stop_numbers["inbound"], stop_name),
+            "direction": "INBOUND",
+        })
     else:
         entries[0]["direction"] = "BOTH"
     return entries
+
+
+def _get_official_stop_names(route, stop_ids):
+    """Fetch official stop names without making metadata a prediction dependency."""
+    requested_ids = {str(stop_id) for stop_id in stop_ids}
+    now = time.time()
+    if now < _stop_metadata_cache["expires_at"]:
+        return {
+            stop_id: name
+            for stop_id, name in _stop_metadata_cache["names"].items()
+            if stop_id in requested_ids
+        }
+
+    if not PAAC_API_KEY:
+        return {}
+
+    try:
+        response = requests.get(
+            TRUETIME_STOPS_URL,
+            params={
+                "key": PAAC_API_KEY,
+                "rt": route,
+                "format": "json",
+                "rtpidatafeed": "Port Authority Bus",
+            },
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json().get("bustime-response", {})
+        if payload.get("error"):
+            return {}
+
+        stop_records = payload.get("stops", payload.get("stp", []))
+        names = {
+            str(record.get("stpid")): record.get("stpnm")
+            for record in stop_records
+            if record.get("stpid") and record.get("stpnm")
+        }
+        _stop_metadata_cache.update({
+            "expires_at": now + STOP_METADATA_CACHE_TTL,
+            "names": names,
+        })
+        return {stop_id: names[stop_id] for stop_id in requested_ids if stop_id in names}
+    except (requests.RequestException, ValueError, AttributeError) as error:
+        logger.warning("Stop metadata lookup unavailable: %s", error)
+        return {}
 
 
 def _same_stop_number_label(stop_numbers):
@@ -609,6 +668,13 @@ def _build_predictions_payload(route, requested_stop):
     # Combine results
     now_label = datetime.now(EASTERN_TZ).strftime("%I:%M:%S %p")
     stop_numbers = _get_stop_numbers(stop)
+    official_names = _get_official_stop_names(route, stop_numbers.values())
+    stop_entries = _get_stop_entries(stop, official_names)
+    outbound_name = stop_entries[0]["name"]
+    inbound_name = next(
+        (entry["name"] for entry in stop_entries if entry["direction"] == "INBOUND"),
+        outbound_name,
+    )
     westview_predictions = (
         dict(outbound_data["predictions"]["to_west_view"])
         if outbound_data
@@ -620,15 +686,15 @@ def _build_predictions_payload(route, requested_stop):
         else {"destination": DESTINATION_DOWNTOWN, "direction": "INBOUND", "arrivals": []}
     )
     westview_predictions["stop_number"] = stop_numbers["outbound"]
-    westview_predictions["stop_name"] = STOP_NAME_MAP.get(stop, "Unknown Stop")
+    westview_predictions["stop_name"] = outbound_name
     downtown_predictions["stop_number"] = stop_numbers["inbound"]
-    downtown_predictions["stop_name"] = STOP_NAME_MAP.get(stop, "Unknown Stop")
+    downtown_predictions["stop_name"] = inbound_name
 
     return {
-        "stop_name": STOP_NAME_MAP.get(stop, "Unknown Stop"),
+        "stop_name": outbound_name,
         "stop_number": _same_stop_number_label(stop_numbers),
         "stop_numbers": stop_numbers,
-        "stops": _get_stop_entries(stop),
+        "stops": stop_entries,
         "route": route,
         "last_updated": now_label,
         "data_source": "truetime",

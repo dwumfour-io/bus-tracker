@@ -18,7 +18,9 @@ from api import (
     _minutes_until,
     _format_status,
     _format_truetime_response,
-    get_predictions_with_fallback
+    get_predictions_with_fallback,
+    _get_official_stop_names,
+    _stop_metadata_cache,
 )
 
 
@@ -149,6 +151,34 @@ class TestTrueTimeResponseFormatting:
         assert result_1016["stop_number"] == "1016"
         assert result_619["stop_name"] == "West View Plaza + Giant Eagle"
         assert result_619["stop_number"] == "619"
+
+    @patch('api.requests.get')
+    @patch('api.PAAC_API_KEY', 'test-key')
+    def test_official_stop_names_are_loaded_by_stop_id(self, mock_get):
+        """Official names should remain distinct and keyed by physical stop ID."""
+        _stop_metadata_cache.update({"expires_at": 0, "names": {}})
+        response = MagicMock()
+        response.json.return_value = {
+            "bustime-response": {
+                "stops": [
+                    {"stpid": "620", "stpnm": "Northbound Main St"},
+                    {"stpid": "618", "stpnm": "Southbound Main St"},
+                ]
+            }
+        }
+        mock_get.return_value = response
+
+        names = _get_official_stop_names("13", ["620", "618"])
+
+        assert names == {"620": "Northbound Main St", "618": "Southbound Main St"}
+        assert mock_get.call_count == 1
+
+    @patch('api.PAAC_API_KEY', '')
+    def test_missing_api_key_falls_back_without_lookup(self):
+        """Missing metadata credentials must not affect the existing app flow."""
+        _stop_metadata_cache.update({"expires_at": 0, "names": {}})
+
+        assert _get_official_stop_names("13", ["620", "618"]) == {}
 
 
 class TestAPIEndpoints:
