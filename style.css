@@ -763,6 +763,23 @@ main {
         font-size: 1.5rem;
     }
 
+    .header-content {
+        align-items: stretch;
+    }
+
+    .logo {
+        justify-content: center;
+    }
+
+    .route-selector,
+    .route-dropdown {
+        width: 100%;
+    }
+
+    .route-dropdown {
+        text-align: center;
+    }
+
     .bus-icon {
         font-size: 2rem;
     }
@@ -801,7 +818,7 @@ main {
     }
 
     .stop-number-display {
-        margin-left: 0;
+        margin-left: 42px;
     }
 
     .status-bar {
@@ -856,6 +873,43 @@ main {
 }
 
 @media (max-width: 480px) {
+    .header {
+        padding: 20px 0 24px;
+    }
+
+    .header h1 {
+        font-size: 1.3rem;
+    }
+
+    .bus-icon {
+        font-size: 1.75rem;
+    }
+
+    .stop-selector {
+        grid-template-columns: 28px minmax(0, 1fr);
+        column-gap: 8px;
+    }
+
+    .stop-dropdown,
+    #set-default-stop {
+        min-height: 48px;
+    }
+
+    .stop-dropdown {
+        font-size: 0.95rem;
+        padding-left: 12px;
+        padding-right: 32px;
+    }
+
+    #set-default-stop {
+        padding: 12px 10px;
+        font-size: 0.95rem;
+    }
+
+    .stop-number-display {
+        margin-left: 36px;
+    }
+
     .arrival-card {
         grid-template-columns: 1fr;
         text-align: center;
