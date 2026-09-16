@@ -83,7 +83,7 @@ function updateDirectionStopNames(stops = []) {
             : [stop.direction === 'OUTBOUND' ? 'to_west_view' : 'to_downtown'];
         directions.forEach((direction) => {
             document.querySelectorAll(`[data-stop-name="${direction}"]`).forEach((element) => {
-                element.textContent = `${stop.name} (#${stop.id})`;
+                element.textContent = stop.name;
             });
         });
     });
@@ -94,10 +94,10 @@ function updateDirectionStopNamesFromSelection() {
     if (!selectedStop) return;
 
     document.querySelectorAll('[data-stop-name="to_west_view"]').forEach((element) => {
-        element.textContent = `${selectedStop.name} (#${selectedStop.numbers.outbound})`;
+        element.textContent = selectedStop.name;
     });
     document.querySelectorAll('[data-stop-name="to_downtown"]').forEach((element) => {
-        element.textContent = `${selectedStop.name} (#${selectedStop.numbers.inbound})`;
+        element.textContent = selectedStop.name;
     });
 }
 
@@ -408,7 +408,7 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
                 </div>
                 <div class="arrival-info">
                     <h3>End of Line</h3>
-                    <div class="arrival-time">Check "To Dahntahn" for departures</div>
+                    <div class="arrival-time">Check "To Downtown" for departures</div>
                 </div>
                 <div class="status-badge terminus">
                     West View
