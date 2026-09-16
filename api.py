@@ -82,9 +82,13 @@ VALID_ROUTES = ['8', '13']
 
 # Stop metadata, including the public stop numbers riders see at the stop.
 STOP_CONFIGS = {
-    "chalfonte": {
+    "stop_1009": {
         "name": "Center Ave + Chalfonte Ave",
-        "numbers": {"outbound": "1009", "inbound": "1016"},
+        "numbers": {"outbound": "1009", "inbound": "1009"},
+    },
+    "stop_1016": {
+        "name": "Center Ave + Chalfonte Ave",
+        "numbers": {"outbound": "1016", "inbound": "1016"},
     },
     "westview": {
         "name": "West View Plaza + Giant Eagle",
@@ -113,7 +117,7 @@ STOP_NAME_MAP = {
     **{key: config["name"] for key, config in STOP_CONFIGS.items()},
     **{stop_id: STOP_CONFIGS[stop_key]["name"] for stop_id, stop_key in STOP_ID_TO_KEY.items()},
 }
-DEFAULT_STOP_KEY = STOP_ID_TO_KEY.get(STOP_ID, "chalfonte")
+DEFAULT_STOP_KEY = STOP_ID_TO_KEY.get(STOP_ID, "stop_618")
 
 # Route 13 typical headways (minutes between buses) by time of day
 # Based on Port Authority schedule patterns

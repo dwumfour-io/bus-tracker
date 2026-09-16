@@ -11,9 +11,13 @@ let currentRoute = '13';
 let currentStop = 'stop_618';
 
 const stopMetadata = {
-    chalfonte: {
+    stop_1009: {
         name: 'Center Ave + Chalfonte Ave',
-        numbers: { outbound: '1009', inbound: '1016' }
+        numbers: { outbound: '1009', inbound: '1009' }
+    },
+    stop_1016: {
+        name: 'Center Ave + Chalfonte Ave',
+        numbers: { outbound: '1016', inbound: '1016' }
     },
     westview: {
         name: 'West View Plaza + Giant Eagle',
@@ -34,7 +38,7 @@ const stopMetadata = {
 // Route 13 serves all stops
 const routeStopCompatibility = {
     '8': ['westview'],  // Route 8 only serves West View Plaza
-    '13': ['chalfonte', 'westview', 'stop_620', 'stop_618']  // Route 13: Center Ave, West View, stops 620/618
+    '13': ['stop_618', 'westview', 'stop_620', 'stop_1009', 'stop_1016']  // Route 13 stop order
 };
 
 function formatStopNumbers(stopNumbers) {
@@ -208,9 +212,8 @@ function initializeStopSelector() {
     stopSelect.addEventListener('change', (e) => {
         currentStop = e.target.value;
 
-        // Auto-switch to Route 13 when Center Ave + Chalfonte Ave is selected
-        // (Route 8 doesn't serve this stop)
-        if (currentStop === 'chalfonte' && currentRoute !== '13') {
+        // Route 8 doesn't serve the Route 13-only stops.
+        if (['stop_1009', 'stop_1016'].includes(currentStop) && currentRoute !== '13') {
             currentRoute = '13';
             routeSelect.value = '13';
         }

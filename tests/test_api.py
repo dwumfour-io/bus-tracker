@@ -89,12 +89,11 @@ class TestTrueTimeResponseFormatting:
         assert result is not None
         assert result["route"] == "13"
         assert result["stop_number"] == "1016"
-        assert result["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
+        assert result["stop_numbers"] == {"outbound": "1016", "inbound": "1016"}
         assert result["stops"] == [
-            {"id": "1009", "name": "Center Ave + Chalfonte Ave", "direction": "OUTBOUND"},
-            {"id": "1016", "name": "Center Ave + Chalfonte Ave", "direction": "INBOUND"},
+            {"id": "1016", "name": "Center Ave + Chalfonte Ave", "direction": "BOTH"},
         ]
-        assert result["predictions"]["to_west_view"]["stop_number"] == "1009"
+        assert result["predictions"]["to_west_view"]["stop_number"] == "1016"
         assert result["predictions"]["to_downtown"]["stop_number"] == "1016"
         assert result["predictions"]["to_west_view"]["arrivals"] == []
         assert result["predictions"]["to_downtown"]["arrivals"] == []
@@ -217,8 +216,8 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["route"] == "13"
-        assert data["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
-        assert data["predictions"]["to_west_view"]["stop_number"] == "1009"
+        assert data["stop_numbers"] == {"outbound": "1016", "inbound": "1016"}
+        assert data["predictions"]["to_west_view"]["stop_number"] == "1016"
         assert data["predictions"]["to_downtown"]["stop_number"] == "1016"
         assert "predictions" in data
     
@@ -230,7 +229,7 @@ class TestAPIEndpoints:
         response = client.get('/predictions?route=13&stop=1016')
         assert response.status_code == 200
         data = json.loads(response.data)
-        assert data["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
+        assert data["stop_numbers"] == {"outbound": "1016", "inbound": "1016"}
         assert data["predictions"]["to_west_view"]["arrivals"] == []
         assert data["predictions"]["to_downtown"]["arrivals"] == []
     
