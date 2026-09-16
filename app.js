@@ -17,6 +17,10 @@ const stopMetadata = {
     westview: {
         name: 'West View Plaza + Giant Eagle',
         numbers: { outbound: '619', inbound: '619' }
+    },
+    stops_620_618: {
+        name: 'Stops 620 / 618',
+        numbers: { outbound: '620', inbound: '618' }
     }
 };
 
@@ -25,7 +29,7 @@ const stopMetadata = {
 // Route 13 serves all stops
 const routeStopCompatibility = {
     '8': ['westview'],  // Route 8 only serves West View Plaza
-    '13': ['chalfonte', 'westview']  // Route 13: Center Ave, West View
+    '13': ['chalfonte', 'westview', 'stops_620_618']  // Route 13: Center Ave, West View, stops 620/618
 };
 
 function formatStopNumbers(stopNumbers) {

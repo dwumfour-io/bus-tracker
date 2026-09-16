@@ -237,17 +237,19 @@ class TestRouteStopCompatibility:
         """Route 13 should serve both stops"""
         compatibility = {
             '8': ['619'],
-            '13': ['1016', '619']
+            '13': ['1016', '619', '620', '618']
         }
         
         assert '1016' in compatibility['13']
         assert '619' in compatibility['13']
+        assert '620' in compatibility['13']
+        assert '618' in compatibility['13']
     
     def test_route_8_only_west_view(self):
         """Route 8 should only serve West View Plaza"""
         compatibility = {
             '8': ['619'],
-            '13': ['1016', '619']
+            '13': ['1016', '619', '620', '618']
         }
         
         assert '619' in compatibility['8']
