@@ -74,9 +74,13 @@ function updateDirectionStopNumbers(predictions = null) {
 
 function updateDirectionStopNames(stops = []) {
     stops.forEach((stop) => {
-        const direction = stop.direction === 'OUTBOUND' ? 'to_west_view' : 'to_downtown';
-        document.querySelectorAll(`[data-stop-name="${direction}"]`).forEach((element) => {
-            element.textContent = `${stop.name} (#${stop.id})`;
+        const directions = stop.direction === 'BOTH'
+            ? ['to_west_view', 'to_downtown']
+            : [stop.direction === 'OUTBOUND' ? 'to_west_view' : 'to_downtown'];
+        directions.forEach((direction) => {
+            document.querySelectorAll(`[data-stop-name="${direction}"]`).forEach((element) => {
+                element.textContent = `${stop.name} (#${stop.id})`;
+            });
         });
     });
 }
@@ -195,9 +199,9 @@ function initializeStopSelector() {
 
     defaultStopButton.addEventListener('click', () => {
         localStorage.setItem(DEFAULT_STOP_STORAGE_KEY, currentStop);
-        defaultStopButton.textContent = 'Default saved';
+        defaultStopButton.textContent = 'Default stop saved';
         setTimeout(() => {
-            defaultStopButton.textContent = 'Set as default';
+            defaultStopButton.textContent = 'Set stop as default';
         }, 2000);
     });
 
