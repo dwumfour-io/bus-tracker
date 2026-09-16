@@ -67,6 +67,15 @@ function updateDirectionStopNumbers(predictions = null) {
     });
 }
 
+function updateDirectionStopNames(stops = []) {
+    stops.forEach((stop) => {
+        const direction = stop.direction === 'OUTBOUND' ? 'to_west_view' : 'to_downtown';
+        document.querySelectorAll(`[data-stop-name="${direction}"]`).forEach((element) => {
+            element.textContent = `${stop.name} (#${stop.id})`;
+        });
+    });
+}
+
 // Register Service Worker for PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -276,6 +285,7 @@ async function fetchPredictions() {
         updateLastUpdated(data.last_updated);
         updateDataSource(data.data_source, data.is_live);
         updateStopNumberDisplay(data.stop_numbers);
+        updateDirectionStopNames(data.stops);
         renderArrivals(data);
 
     } catch (error) {

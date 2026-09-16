@@ -154,6 +154,20 @@ def _get_stop_numbers(stop):
     return {"outbound": selected_stop, "inbound": selected_stop}
 
 
+def _get_stop_entries(stop):
+    """Return the physical stop records represented by a configured stop."""
+    stop_numbers = _get_stop_numbers(stop)
+    stop_name = _get_stop_name(stop)
+    entries = [
+        {"id": stop_numbers["outbound"], "name": stop_name, "direction": "OUTBOUND"},
+    ]
+    if stop_numbers["inbound"] != stop_numbers["outbound"]:
+        entries.append({"id": stop_numbers["inbound"], "name": stop_name, "direction": "INBOUND"})
+    else:
+        entries[0]["direction"] = "BOTH"
+    return entries
+
+
 def _same_stop_number_label(stop_numbers):
     """Get a single stop number when both directions use the same stop."""
     outbound = stop_numbers.get("outbound")
@@ -194,6 +208,7 @@ def _empty_predictions_response(stop_name, route, stop=None):
         "stop_name": stop_name,
         "stop_number": single_stop_number,
         "stop_numbers": stop_numbers,
+        "stops": _get_stop_entries(stop),
         "route": route,
         "last_updated": now_label,
         "data_source": "truetime",
@@ -204,12 +219,14 @@ def _empty_predictions_response(stop_name, route, stop=None):
             "to_west_view": {
                 "destination": DESTINATION_WEST_VIEW,
                 "direction": "OUTBOUND",
+                "stop_name": stop_name,
                 "stop_number": stop_numbers["outbound"],
                 "arrivals": [],
             },
             "to_downtown": {
                 "destination": DESTINATION_DOWNTOWN,
                 "direction": "INBOUND",
+                "stop_name": stop_name,
                 "stop_number": stop_numbers["inbound"],
                 "arrivals": [],
             },
@@ -354,6 +371,7 @@ def _format_truetime_response(data, route=None, stop=None):
             "stop_name": display_stop_name,
             "stop_number": selected_stop_number,
             "stop_numbers": stop_numbers,
+            "stops": _get_stop_entries(selected_stop),
             "route": selected_route,
             "last_updated": now_label,
             "data_source": "truetime",
@@ -362,12 +380,14 @@ def _format_truetime_response(data, route=None, stop=None):
                 "to_west_view": {
                     "destination": DESTINATION_WEST_VIEW,
                     "direction": "OUTBOUND",
+                    "stop_name": display_stop_name,
                     "stop_number": selected_stop_number or stop_numbers["outbound"],
                     "arrivals": to_west_view,
                 },
                 "to_downtown": {
                     "destination": DESTINATION_DOWNTOWN,
                     "direction": "INBOUND",
+                    "stop_name": display_stop_name,
                     "stop_number": selected_stop_number or stop_numbers["inbound"],
                     "arrivals": to_downtown,
                 },
@@ -600,12 +620,15 @@ def _build_predictions_payload(route, requested_stop):
         else {"destination": DESTINATION_DOWNTOWN, "direction": "INBOUND", "arrivals": []}
     )
     westview_predictions["stop_number"] = stop_numbers["outbound"]
+    westview_predictions["stop_name"] = STOP_NAME_MAP.get(stop, "Unknown Stop")
     downtown_predictions["stop_number"] = stop_numbers["inbound"]
+    downtown_predictions["stop_name"] = STOP_NAME_MAP.get(stop, "Unknown Stop")
 
     return {
         "stop_name": STOP_NAME_MAP.get(stop, "Unknown Stop"),
         "stop_number": _same_stop_number_label(stop_numbers),
         "stop_numbers": stop_numbers,
+        "stops": _get_stop_entries(stop),
         "route": route,
         "last_updated": now_label,
         "data_source": "truetime",

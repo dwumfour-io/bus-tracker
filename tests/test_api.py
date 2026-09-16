@@ -88,6 +88,10 @@ class TestTrueTimeResponseFormatting:
         assert result["route"] == "13"
         assert result["stop_number"] == "1016"
         assert result["stop_numbers"] == {"outbound": "1009", "inbound": "1016"}
+        assert result["stops"] == [
+            {"id": "1009", "name": "Center Ave + Chalfonte Ave", "direction": "OUTBOUND"},
+            {"id": "1016", "name": "Center Ave + Chalfonte Ave", "direction": "INBOUND"},
+        ]
         assert result["predictions"]["to_west_view"]["stop_number"] == "1009"
         assert result["predictions"]["to_downtown"]["stop_number"] == "1016"
         assert result["predictions"]["to_west_view"]["arrivals"] == []
