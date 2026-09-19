@@ -258,6 +258,10 @@ main {
     color: var(--success);
 }
 
+.status-value.scheduled {
+    color: #9A6700;
+}
+
 .status-value.offline {
     color: var(--danger);
 }

@@ -16,6 +16,7 @@ import time
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from google.transit import gtfs_realtime_pb2
+from gtfs_static import load_gtfs
 
 # Pittsburgh timezone
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -69,11 +70,14 @@ TRUETIME_STOPS_URL = f"{TRUETIME_BASE_URL}/getstops"
 API_PORT = int(os.environ.get("API_PORT", 5001))
 STOP_METADATA_CACHE_TTL = 3600
 _stop_metadata_cache = {"expires_at": 0, "names": {}}
+GTFSRT_CACHE_TTL = 15
+_gtfsrt_feed_cache = {"expires_at": 0, "feed": None}
+STATIC_GTFS = load_gtfs()
 
 # Bus 13 Configuration
 BUS_ROUTE = os.environ.get("BUS_ROUTE", "13")
-STOP_ID = os.environ.get("STOP_ID", "618")  # Default to stop 618
-STOP_NAME = os.environ.get("STOP_NAME", "Stop 618")
+STOP_ID = os.environ.get("STOP_ID", "1009")
+STOP_NAME = os.environ.get("STOP_NAME", "Center Ave + Chalfonte Ave")
 DESTINATION_WEST_VIEW = os.environ.get("DESTINATION_WEST_VIEW", "West View Plaza Fire Lane + Giant Eagle")
 DESTINATION_DOWNTOWN = os.environ.get("DESTINATION_DOWNTOWN", "Downtown Pittsburgh")
 
@@ -84,33 +88,34 @@ VALID_ROUTES = ['8', '13']
 STOP_CONFIGS = {
     "stop_1009": {
         "name": "Center Ave + Chalfonte Ave",
+        "names": {"outbound": "Center Ave + Chalfonte Ave"},
         "numbers": {"outbound": "1009", "inbound": "1009"},
         "directions": ["to_west_view"],
     },
     "stop_1016": {
         "name": "Center Ave + Chalfonte Ave",
+        "names": {"inbound": "Center Ave + Chalfonte Ave"},
         "numbers": {"outbound": "1016", "inbound": "1016"},
         "directions": ["to_downtown"],
     },
     "westview": {
-        "name": "West View Plaza + Giant Eagle",
+        "name": "West View Plaza Fire Lane + Giant Eagle",
         "numbers": {"outbound": "619", "inbound": "619"},
         "directions": ["to_west_view", "to_downtown"],
     },
     "stop_620": {
-        "name": "Stop 620",
+        "name": "West View Plaza Fire Lane + U-Haul",
         "numbers": {"outbound": "620", "inbound": "620"},
-        "directions": ["to_downtown"],
-    },
-    "stop_1020": {
-        "name": "Stop 1020",
-        "numbers": {"outbound": "1020", "inbound": "1020"},
-        "directions": ["to_downtown"],
+        "directions": ["to_west_view", "to_downtown"],
     },
     "stop_618": {
-        "name": "Stop 618",
-        "numbers": {"outbound": "618", "inbound": "618"},
-        "directions": ["to_west_view"],
+        "name": "West View Park Dr + West View Towers",
+        "names": {
+            "outbound": "West View Park Dr + West View Towers",
+            "inbound": "West View Park Dr + West View Tower",
+        },
+        "numbers": {"outbound": "618", "inbound": "733"},
+        "directions": ["to_west_view", "to_downtown"],
     },
 }
 VALID_STOPS = list(STOP_CONFIGS.keys())
@@ -127,7 +132,7 @@ STOP_NAME_MAP = {
     **{key: config["name"] for key, config in STOP_CONFIGS.items()},
     **{stop_id: STOP_CONFIGS[stop_key]["name"] for stop_id, stop_key in STOP_ID_TO_KEY.items()},
 }
-DEFAULT_STOP_KEY = STOP_ID_TO_KEY.get(STOP_ID, "stop_618")
+DEFAULT_STOP_KEY = STOP_ID_TO_KEY.get(STOP_ID, "stop_1009")
 
 # Route 13 typical headways (minutes between buses) by time of day
 # Based on Port Authority schedule patterns
@@ -178,24 +183,39 @@ def _get_stop_numbers(stop):
 
 def _get_stop_entries(stop, official_names=None):
     """Return the physical stop records represented by a configured stop."""
+    stop_key = _resolve_stop_key(stop)
+    config = STOP_CONFIGS.get(stop_key, {})
     stop_numbers = _get_stop_numbers(stop)
     stop_name = _get_stop_name(stop)
+    direction_names = config.get("names", {})
     official_names = official_names or {}
     entries = [
         {
             "id": stop_numbers["outbound"],
-            "name": official_names.get(stop_numbers["outbound"], stop_name),
+            "name": official_names.get(
+                stop_numbers["outbound"],
+                direction_names.get("outbound", stop_name),
+            ),
             "direction": "OUTBOUND",
         },
     ]
     if stop_numbers["inbound"] != stop_numbers["outbound"]:
         entries.append({
             "id": stop_numbers["inbound"],
-            "name": official_names.get(stop_numbers["inbound"], stop_name),
+            "name": official_names.get(
+                stop_numbers["inbound"],
+                direction_names.get("inbound", stop_name),
+            ),
             "direction": "INBOUND",
         })
     else:
-        entries[0]["direction"] = "BOTH"
+        directions = config.get("directions", [])
+        if directions == ["to_west_view"]:
+            entries[0]["direction"] = "OUTBOUND"
+        elif directions == ["to_downtown"]:
+            entries[0]["direction"] = "INBOUND"
+        else:
+            entries[0]["direction"] = "BOTH"
     return entries
 
 
@@ -210,16 +230,37 @@ def _get_stop_directions(stop):
 def _get_official_stop_names(route, stop_ids):
     """Fetch official stop names without making metadata a prediction dependency."""
     requested_ids = {str(stop_id) for stop_id in stop_ids}
+    configured_names = {}
+    for stop_id in requested_ids:
+        stop_key = STOP_ID_TO_KEY.get(stop_id)
+        config = STOP_CONFIGS.get(stop_key, {})
+        numbers = config.get("numbers", {})
+        names = config.get("names", {})
+        if stop_id == numbers.get("outbound"):
+            configured_names[stop_id] = names.get("outbound", config.get("name"))
+        elif stop_id == numbers.get("inbound"):
+            configured_names[stop_id] = names.get("inbound", config.get("name"))
+
+    missing_ids = requested_ids - configured_names.keys()
+    if not missing_ids:
+        return configured_names
+
     now = time.time()
     if now < _stop_metadata_cache["expires_at"]:
-        return {
+        cached_names = {
             stop_id: name
             for stop_id, name in _stop_metadata_cache["names"].items()
-            if stop_id in requested_ids
+            if stop_id in missing_ids
         }
+        return {**configured_names, **cached_names}
 
     if not PAAC_API_KEY:
-        return {}
+        static_names = {
+            stop_id: STATIC_GTFS.stop_name(stop_id)
+            for stop_id in missing_ids
+            if STATIC_GTFS.stop_name(stop_id)
+        }
+        return {**configured_names, **static_names}
 
     try:
         response = requests.get(
@@ -247,10 +288,11 @@ def _get_official_stop_names(route, stop_ids):
             "expires_at": now + STOP_METADATA_CACHE_TTL,
             "names": names,
         })
-        return {stop_id: names[stop_id] for stop_id in requested_ids if stop_id in names}
+        api_names = {stop_id: names[stop_id] for stop_id in missing_ids if stop_id in names}
+        return {**configured_names, **api_names}
     except (requests.RequestException, ValueError, AttributeError) as error:
         logger.warning("Stop metadata lookup unavailable: %s", error)
-        return {}
+        return configured_names
 
 
 def _same_stop_number_label(stop_numbers):
@@ -298,7 +340,7 @@ def _empty_predictions_response(stop_name, route, stop=None):
         "route": route,
         "last_updated": now_label,
         "data_source": "truetime",
-        "is_live": True,
+        "is_live": False,
         "expected_headway": headway,
         "schedule_period": period,
         "predictions": {
@@ -331,7 +373,7 @@ def _format_status(delay_seconds: int | None) -> str:
     """Turn delay seconds into a short status label."""
     if delay_seconds is None:
         return "On Time"
-    minutes = int(delay_seconds / 60)
+    minutes = round(delay_seconds / 60)
     if minutes > 0:
         return f"Delayed +{minutes} min"
     if minutes < 0:
@@ -418,7 +460,10 @@ def _format_truetime_response(data, route=None, stop=None):
             arrival_time_raw = pred.get("prdtm", "N/A")  # Format: "20260102 23:38"
             vehicle_id = pred.get("vid", "N/A")
             is_delayed = pred.get("dly", False)
-            status = "Delayed" if is_delayed else "On Time"
+            prediction_type = "scheduled" if pred.get("typ") == "S" else "live"
+            status = "Scheduled" if prediction_type == "scheduled" else (
+                "Delayed" if is_delayed else "On Time"
+            )
 
             # Use the countdown from API (already in minutes)
             minutes = int(pred.get("prdctdn", 0))
@@ -436,6 +481,10 @@ def _format_truetime_response(data, route=None, stop=None):
                 "time": arrival_time_display,
                 "vehicle_id": vehicle_id,
                 "status": status,
+                "is_live": prediction_type == "live",
+                "prediction_type": prediction_type,
+                "delay_seconds": None,
+                "delay_minutes": None,
             }
 
             direction = pred.get("rtdir", "OUTBOUND").upper()
@@ -462,7 +511,9 @@ def _format_truetime_response(data, route=None, stop=None):
             "route": selected_route,
             "last_updated": now_label,
             "data_source": "truetime",
-            "is_live": True,
+            "is_live": any(
+                arrival["is_live"] for arrival in to_west_view + to_downtown
+            ),
             "predictions": {
                 "to_west_view": {
                     "destination": DESTINATION_WEST_VIEW,
@@ -485,6 +536,49 @@ def _format_truetime_response(data, route=None, stop=None):
         return None
 
 
+def _get_gtfsrt_feed():
+    """Fetch and briefly cache the shared GTFS-RT feed."""
+    now = time.time()
+    if _gtfsrt_feed_cache["feed"] is not None and now < _gtfsrt_feed_cache["expires_at"]:
+        return _gtfsrt_feed_cache["feed"]
+
+    response = requests.get(GTFSRT_TRIPS_URL, timeout=10)
+    response.raise_for_status()
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.ParseFromString(response.content)
+    _gtfsrt_feed_cache.update({
+        "expires_at": now + GTFSRT_CACHE_TTL,
+        "feed": feed,
+    })
+    return feed
+
+
+def _physical_stop_directions(stop):
+    """Map the requested physical stop IDs to app direction keys."""
+    selected_stop = str(stop) if str(stop) in STOP_ID_TO_KEY else None
+    stop_key = _resolve_stop_key(stop) or DEFAULT_STOP_KEY
+    numbers = _get_stop_numbers(stop_key)
+    mapping = {}
+    if not selected_stop or selected_stop == numbers["outbound"]:
+        mapping.setdefault(numbers["outbound"], []).append("to_west_view")
+    if not selected_stop or selected_stop == numbers["inbound"]:
+        mapping.setdefault(numbers["inbound"], []).append("to_downtown")
+    return stop_key, mapping
+
+
+def _trip_direction_key(trip_id):
+    """Translate the static GTFS direction ID into an app direction key."""
+    return "to_downtown" if STATIC_GTFS.trip_direction(trip_id) == "1" else "to_west_view"
+
+
+def _arrival_direction(stop_id, trip_id, stop_directions):
+    choices = stop_directions.get(stop_id, [])
+    if len(choices) == 1:
+        return choices[0]
+    trip_direction = _trip_direction_key(trip_id)
+    return trip_direction if trip_direction in choices else (choices[0] if choices else None)
+
+
 def get_predictions_gtfsrt(route=None, stop=None):
     """Fetch predictions from GTFS-Realtime TripUpdates feed (FALLBACK).
 
@@ -494,23 +588,20 @@ def get_predictions_gtfsrt(route=None, stop=None):
     try:
         stop = stop or DEFAULT_STOP_KEY
         route = route or BUS_ROUTE
-        stop_key = _resolve_stop_key(stop) or DEFAULT_STOP_KEY
-        stop_config = PAIRED_STOPS[stop_key]
+        stop_key, stop_directions = _physical_stop_directions(stop)
         stop_name = _get_stop_name(stop_key)
         stop_numbers = _get_stop_numbers(stop_key)
         single_stop_number = _same_stop_number_label(stop_numbers)
 
-        outbound_stop_id = stop_config["outbound"]
-        inbound_stop_id = stop_config["inbound"]
+        requested_stop_ids = set(stop_directions)
 
-        logger.info(f"GTFS-RT: Fetching predictions for route {route}, stops {outbound_stop_id}/{inbound_stop_id}")
+        logger.info(
+            "GTFS-RT: Reading predictions for route %s, stops %s",
+            route,
+            "/".join(sorted(requested_stop_ids)),
+        )
 
-        # Fetch GTFS-RT protobuf feed
-        response = requests.get(GTFSRT_TRIPS_URL, timeout=10)
-        response.raise_for_status()
-
-        feed = gtfs_realtime_pb2.FeedMessage()
-        feed.ParseFromString(response.content)
+        feed = _get_gtfsrt_feed()
 
         now = datetime.now(EASTERN_TZ)
         now_label = now.strftime("%I:%M:%S %p")
@@ -534,7 +625,7 @@ def get_predictions_gtfsrt(route=None, stop=None):
             for stu in entity.trip_update.stop_time_update:
                 stop_id = stu.stop_id
 
-                if stop_id not in [outbound_stop_id, inbound_stop_id]:
+                if stop_id not in requested_stop_ids:
                     continue
 
                 # Get arrival time
@@ -553,18 +644,40 @@ def get_predictions_gtfsrt(route=None, stop=None):
                 arrival_dt = datetime.fromtimestamp(arrival_time, tz=EASTERN_TZ)
                 arrival_str = arrival_dt.strftime("%I:%M %p").lstrip("0")
 
+                scheduled_dt = STATIC_GTFS.scheduled_datetime_for_prediction(
+                    trip.trip_id,
+                    stop_id,
+                    arrival_dt,
+                )
+                delay_seconds = None
+                if scheduled_dt:
+                    delay_seconds = round((arrival_dt - scheduled_dt).total_seconds())
+
                 arrival_data = {
                     "minutes": minutes,
                     "arrival_time": arrival_str,
-                    "is_delayed": False,
-                    "status": "On Time",
+                    "time": arrival_str,
+                    "scheduled_time": (
+                        scheduled_dt.strftime("%I:%M %p").lstrip("0")
+                        if scheduled_dt else None
+                    ),
+                    "is_delayed": delay_seconds is not None and delay_seconds >= 60,
+                    "status": _format_status(delay_seconds),
+                    "delay_seconds": delay_seconds,
+                    "delay_minutes": (
+                        round(delay_seconds / 60) if delay_seconds is not None else None
+                    ),
                     "stop_number": stop_id,
                     "vehicle_id": entity.trip_update.vehicle.id if entity.trip_update.HasField('vehicle') else None,
+                    "trip_id": trip.trip_id,
+                    "is_live": True,
+                    "prediction_type": "live",
                 }
 
-                if stop_id == outbound_stop_id:
+                direction_key = _arrival_direction(stop_id, trip.trip_id, stop_directions)
+                if direction_key == "to_west_view":
                     outbound_arrivals.append(arrival_data)
-                elif stop_id == inbound_stop_id:
+                elif direction_key == "to_downtown":
                     inbound_arrivals.append(arrival_data)
 
         # Sort by minutes and limit to 5 per direction
@@ -584,20 +697,20 @@ def get_predictions_gtfsrt(route=None, stop=None):
             "route": route,
             "last_updated": now_label,
             "data_source": "gtfs-rt",
-            "is_live": True,
+            "is_live": bool(outbound_arrivals or inbound_arrivals),
             "expected_headway": headway,
             "schedule_period": period,
             "predictions": {
                 "to_west_view": {
                     "destination": DESTINATION_WEST_VIEW,
                     "direction": "OUTBOUND",
-                    "stop_number": outbound_stop_id,
+                    "stop_number": stop_numbers["outbound"],
                     "arrivals": outbound_arrivals,
                 },
                 "to_downtown": {
                     "destination": DESTINATION_DOWNTOWN,
                     "direction": "INBOUND",
-                    "stop_number": inbound_stop_id,
+                    "stop_number": stop_numbers["inbound"],
                     "arrivals": inbound_arrivals,
                 },
             },
@@ -608,22 +721,103 @@ def get_predictions_gtfsrt(route=None, stop=None):
         return None
 
 
+def get_predictions_static(route=None, stop=None):
+    """Return upcoming scheduled service when no live prediction is available."""
+    if not STATIC_GTFS.available:
+        return None
+
+    selected_route = route or BUS_ROUTE
+    selected_stop = stop or DEFAULT_STOP_KEY
+    stop_key, stop_directions = _physical_stop_directions(selected_stop)
+    stop_numbers = _get_stop_numbers(stop_key)
+    now = datetime.now(EASTERN_TZ)
+    arrivals = {"to_west_view": [], "to_downtown": []}
+
+    for stop_id in stop_directions:
+        for scheduled in STATIC_GTFS.upcoming_arrivals(selected_route, stop_id, now, limit=5):
+            direction_key = _arrival_direction(
+                stop_id,
+                scheduled["trip_id"],
+                stop_directions,
+            )
+            if not direction_key:
+                continue
+            scheduled_dt = scheduled["scheduled_datetime"]
+            arrivals[direction_key].append({
+                "minutes": scheduled["minutes"],
+                "time": scheduled_dt.strftime("%I:%M %p").lstrip("0"),
+                "scheduled_time": scheduled_dt.strftime("%I:%M %p").lstrip("0"),
+                "vehicle_id": None,
+                "trip_id": scheduled["trip_id"],
+                "status": "Scheduled",
+                "is_live": False,
+                "prediction_type": "scheduled",
+                "delay_seconds": None,
+                "delay_minutes": None,
+                "stop_number": stop_id,
+            })
+
+    for direction_arrivals in arrivals.values():
+        direction_arrivals.sort(key=lambda item: item["minutes"])
+        del direction_arrivals[5:]
+
+    headway, period = _get_expected_headway(selected_route)
+    return {
+        "stop_name": _get_stop_name(stop_key),
+        "stop_number": _same_stop_number_label(stop_numbers),
+        "stop_numbers": stop_numbers,
+        "route": selected_route,
+        "last_updated": now.strftime("%I:%M:%S %p"),
+        "data_source": "gtfs-static",
+        "is_live": False,
+        "feed_valid_through": (
+            STATIC_GTFS.valid_through.isoformat() if STATIC_GTFS.valid_through else None
+        ),
+        "expected_headway": headway,
+        "schedule_period": period,
+        "predictions": {
+            "to_west_view": {
+                "destination": DESTINATION_WEST_VIEW,
+                "direction": "OUTBOUND",
+                "stop_number": stop_numbers["outbound"],
+                "arrivals": arrivals["to_west_view"],
+            },
+            "to_downtown": {
+                "destination": DESTINATION_DOWNTOWN,
+                "direction": "INBOUND",
+                "stop_number": stop_numbers["inbound"],
+                "arrivals": arrivals["to_downtown"],
+            },
+        },
+    }
+
+
+def _has_arrivals(data):
+    if not data:
+        return False
+    return any(
+        direction.get("arrivals")
+        for direction in data.get("predictions", {}).values()
+    )
+
+
 def get_predictions_with_fallback(route=None, stop=None):
-    """Try TrueTime API first, then fall back to GTFS-RT."""
-    # Try TrueTime API first (requires API key)
+    """Use live feeds first and the static schedule as the final fallback."""
     truetime_data = get_predictions_truetime(route, stop)
-    if truetime_data:
+    if _has_arrivals(truetime_data):
         return truetime_data
 
-    # Fall back to GTFS-RT (no API key needed)
-    logger.info("TrueTime failed, trying GTFS-RT fallback...")
+    logger.info("TrueTime had no arrivals; checking GTFS-RT")
     gtfsrt_data = get_predictions_gtfsrt(route, stop)
-    if gtfsrt_data:
+    if _has_arrivals(gtfsrt_data):
         return gtfsrt_data
 
-    # Return error response if both fail
-    logger.error("Both TrueTime and GTFS-RT failed")
-    return None
+    logger.info("No live arrival found; checking the static GTFS schedule")
+    static_data = get_predictions_static(route, stop)
+    if _has_arrivals(static_data):
+        return static_data
+
+    return truetime_data or gtfsrt_data or static_data
 
 
 @app.route("/")
@@ -658,7 +852,16 @@ def serve_service_worker():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "static_gtfs": {
+            "available": STATIC_GTFS.available,
+            "valid_through": (
+                STATIC_GTFS.valid_through.isoformat() if STATIC_GTFS.valid_through else None
+            ),
+        },
+    })
 
 
 def _build_predictions_payload(route, requested_stop):
@@ -719,6 +922,18 @@ def _build_predictions_payload(route, requested_stop):
     downtown_predictions["stop_number"] = stop_numbers["inbound"]
     downtown_predictions["stop_name"] = inbound_name
 
+    direction_data = [data for data in (outbound_data, inbound_data) if data]
+    active_data = [data for data in direction_data if _has_arrivals(data)] or direction_data
+    data_sources = list(dict.fromkeys(
+        data.get("data_source") for data in active_data if data.get("data_source")
+    ))
+    data_source = "+".join(data_sources) if data_sources else "unavailable"
+    is_live = any(data.get("is_live", False) for data in active_data)
+    feed_valid_through = next(
+        (data.get("feed_valid_through") for data in active_data if data.get("feed_valid_through")),
+        None,
+    )
+
     return {
         "stop_name": outbound_name,
         "stop_number": _same_stop_number_label(stop_numbers),
@@ -727,8 +942,9 @@ def _build_predictions_payload(route, requested_stop):
         "stops": stop_entries,
         "route": route,
         "last_updated": now_label,
-        "data_source": "truetime",
-        "is_live": True,
+        "data_source": data_source,
+        "is_live": is_live,
+        "feed_valid_through": feed_valid_through,
         "expected_headway": headway,
         "schedule_period": period,
         "predictions": {
@@ -794,35 +1010,22 @@ def get_multi_route_predictions():
         if stop != 'westview':
             return jsonify({"error": "Multi-route only available for westview"}), 400
 
-        # Fetch predictions for both routes at West View
-        # Use the full prediction flow which handles stop ID lookup
-        route_8_data = get_predictions_truetime('8', '619')
-        route_13_data = get_predictions_truetime('13', '619')
-
-        # If TrueTime fails, try GTFS-RT
-        if not route_8_data:
-            route_8_data = get_predictions_gtfsrt('8', 'westview')
-        if not route_13_data:
-            route_13_data = get_predictions_gtfsrt('13', 'westview')
+        route_8_data = get_predictions_with_fallback('8', '619')
+        route_13_data = get_predictions_with_fallback('13', '619')
 
         now_label = datetime.now(EASTERN_TZ).strftime("%I:%M:%S %p")
 
-        # For West View terminus: buses arrive OUTBOUND (from downtown)
-        # and then turn around to go INBOUND (to downtown)
-        # So for catching a downtown-bound bus at West View, we show OUTBOUND arrivals
-        # because these are the buses arriving that will then go downtown
         downtown_arrivals = []
 
-        # Use outbound arrivals since this is a terminus
-        if route_8_data and route_8_data.get("predictions", {}).get("to_west_view", {}).get("arrivals"):
-            for arr in route_8_data["predictions"]["to_west_view"]["arrivals"]:
-                arr["route"] = "8"
-                downtown_arrivals.append(arr)
-
-        if route_13_data and route_13_data.get("predictions", {}).get("to_west_view", {}).get("arrivals"):
-            for arr in route_13_data["predictions"]["to_west_view"]["arrivals"]:
-                arr["route"] = "13"
-                downtown_arrivals.append(arr)
+        for route_id, route_data in (("8", route_8_data), ("13", route_13_data)):
+            if not route_data:
+                continue
+            predictions = route_data.get("predictions", {})
+            route_arrivals = predictions.get("to_downtown", {}).get("arrivals", [])
+            if not route_arrivals:
+                route_arrivals = predictions.get("to_west_view", {}).get("arrivals", [])
+            for arrival in route_arrivals:
+                downtown_arrivals.append({**arrival, "route": route_id})
 
         # Sort by minutes
         downtown_arrivals.sort(key=lambda x: x.get("minutes", 999))
@@ -834,15 +1037,21 @@ def get_multi_route_predictions():
         # Use the shorter headway for display
         combined_headway = min(headway_8, headway_13)
         stop_numbers = _get_stop_numbers("westview")
+        route_data = [data for data in (route_8_data, route_13_data) if data]
+        data_sources = list(dict.fromkeys(
+            data.get("data_source") for data in route_data if data.get("data_source")
+        ))
 
         return jsonify({
-            "stop_name": "West View Plaza + Giant Eagle",
+            "stop_name": "West View Plaza Fire Lane + Giant Eagle",
             "stop_number": _same_stop_number_label(stop_numbers),
             "stop_numbers": stop_numbers,
+            "directions": ["to_west_view", "to_downtown"],
+            "stops": _get_stop_entries("westview"),
             "routes": ["8", "13"],
             "last_updated": now_label,
-            "data_source": route_8_data.get("data_source") if route_8_data else "truetime",
-            "is_live": True,
+            "data_source": "+".join(data_sources) if data_sources else "unavailable",
+            "is_live": any(data.get("is_live", False) for data in route_data),
             "expected_headway": combined_headway,
             "schedule_period": period_8,
             "is_terminus": True,

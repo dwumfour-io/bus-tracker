@@ -8,47 +8,48 @@ const DEFAULT_STOP_STORAGE_KEY = 'pixburgh-bus-tracker-default-stop';
 let autoRefreshInterval = null;
 let currentData = null;
 let currentRoute = '13';
-let currentStop = 'stop_618';
+let currentStop = 'stop_1009';
 
 const stopMetadata = {
     stop_1009: {
         name: 'Center Ave + Chalfonte Ave',
+        names: { to_west_view: 'Center Ave + Chalfonte Ave' },
         numbers: { outbound: '1009', inbound: '1009' },
-        directions: ['to_west_view']
+        directions: ['to_west_view'],
+        alternate: { direction: 'to_downtown', stopNumber: '1016' }
     },
     stop_1016: {
         name: 'Center Ave + Chalfonte Ave',
+        names: { to_downtown: 'Center Ave + Chalfonte Ave' },
         numbers: { outbound: '1016', inbound: '1016' },
-        directions: ['to_downtown']
+        directions: ['to_downtown'],
+        alternate: { direction: 'to_west_view', stopNumber: '1009' }
     },
     westview: {
-        name: 'West View Plaza + Giant Eagle',
+        name: 'West View Plaza Fire Lane + Giant Eagle',
         numbers: { outbound: '619', inbound: '619' },
         directions: ['to_west_view', 'to_downtown']
     },
     stop_620: {
-        name: 'Stop 620',
+        name: 'West View Plaza Fire Lane + U-Haul',
         numbers: { outbound: '620', inbound: '620' },
-        directions: ['to_downtown']
-    },
-    stop_1020: {
-        name: 'Stop 1020',
-        numbers: { outbound: '1020', inbound: '1020' },
-        directions: ['to_downtown']
+        directions: ['to_west_view', 'to_downtown']
     },
     stop_618: {
-        name: 'Stop 618',
-        numbers: { outbound: '618', inbound: '618' },
-        directions: ['to_west_view']
+        name: 'West View Park Dr + West View Towers',
+        names: {
+            to_west_view: 'West View Park Dr + West View Towers',
+            to_downtown: 'West View Park Dr + West View Tower'
+        },
+        numbers: { outbound: '618', inbound: '733' },
+        directions: ['to_west_view', 'to_downtown']
     }
 };
 
 // Route-stop compatibility mapping
-// Route 8 only serves West View Plaza
-// Route 13 serves all stops
 const routeStopCompatibility = {
-    '8': ['westview'],  // Route 8 only serves West View Plaza
-    '13': ['stop_618', 'westview', 'stop_620', 'stop_1020', 'stop_1009', 'stop_1016']  // Route 13 stop order
+    '8': ['stop_618', 'westview', 'stop_620'],
+    '13': ['stop_1009', 'stop_1016', 'stop_618', 'westview', 'stop_620']
 };
 
 function formatStopNumbers(stopNumbers) {
@@ -104,10 +105,10 @@ function updateDirectionStopNamesFromSelection() {
     if (!selectedStop) return;
 
     document.querySelectorAll('[data-stop-name="to_west_view"]').forEach((element) => {
-        element.textContent = selectedStop.name;
+        element.textContent = selectedStop.names?.to_west_view || selectedStop.name;
     });
     document.querySelectorAll('[data-stop-name="to_downtown"]').forEach((element) => {
-        element.textContent = selectedStop.name;
+        element.textContent = selectedStop.names?.to_downtown || selectedStop.name;
     });
 }
 
@@ -336,7 +337,7 @@ async function fetchPredictions() {
 
         currentData = data;
 
-        updateStatus('Connected', 'live');
+        updateStatus(data.is_live ? 'Live' : 'Schedule only', data.is_live ? 'live' : 'scheduled');
         updateLastUpdated(data.last_updated);
         updateDataSource(data.data_source, data.is_live);
         updateStopNumberDisplay(data.stop_numbers);
@@ -373,10 +374,14 @@ function updateDataSource(source, isLive) {
     const sourceElement = document.getElementById('data-source');
     const sourceText = {
         'truetime': 'TrueTime API',
-        'gtfs-rt': 'GTFS-RT Feed'
+        'gtfs-rt': 'GTFS-RT Feed',
+        'gtfs-static': 'PRT schedule'
     };
 
-    sourceElement.textContent = sourceText[source] || source;
+    sourceElement.textContent = source
+        .split('+')
+        .map((part) => sourceText[part] || part)
+        .join(' + ');
 
     if (!isLive) {
         sourceElement.style.color = 'var(--warning)';
@@ -398,17 +403,24 @@ function renderArrivals(data) {
     const isAtWestView = currentStop === 'westview';
 
     // Render for "Both Directions" tab
-    renderDirectionList('westview-arrivals', westviewData.arrivals, directions.includes('to_west_view'), isAtWestView ? 'westview' : null, expectedHeadway);
-    renderArrivalList('downtown-arrivals', downtownData.arrivals, null, expectedHeadway);
+    renderDirectionList('westview-arrivals', westviewData.arrivals, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('downtown-arrivals', downtownData.arrivals, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
 
     // Render for individual tabs
-    renderDirectionList('westview-arrivals-single', westviewData.arrivals, directions.includes('to_west_view'), isAtWestView ? 'westview' : null, expectedHeadway);
-    renderArrivalList('downtown-arrivals-single', downtownData.arrivals, null, expectedHeadway);
+    renderDirectionList('westview-arrivals-single', westviewData.arrivals, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('downtown-arrivals-single', downtownData.arrivals, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
 }
 
-function renderDirectionList(containerId, arrivals, isServed, terminus = null, expectedHeadway = null) {
+function renderDirectionList(containerId, arrivals, isServed, direction, terminus = null, expectedHeadway = null) {
     if (!isServed) {
         const container = document.getElementById(containerId);
+        const alternate = stopMetadata[currentStop]?.alternate;
+        const isWestView = direction === 'to_west_view';
+        const heading = isWestView ? 'Downtown-bound stop' : 'West View-bound stop';
+        const destination = isWestView ? 'West View' : 'Downtown';
+        const alternateText = alternate?.direction === direction
+            ? ` Use Stop #${alternate.stopNumber} across the street.`
+            : '';
         container.innerHTML = `
             <div class="arrival-card schedule-card">
                 <div class="minutes-display schedule-icon">
@@ -416,8 +428,8 @@ function renderDirectionList(containerId, arrivals, isServed, terminus = null, e
                     <div class="minutes-label">&nbsp;</div>
                 </div>
                 <div class="arrival-info">
-                    <h3>Downtown-bound stop</h3>
-                    <div class="arrival-time">West View service is not available at this stop.</div>
+                    <h3>${heading}</h3>
+                    <div class="arrival-time">${destination} service is not available here.${alternateText}</div>
                 </div>
                 <div class="status-badge schedule">Not served</div>
             </div>`;
@@ -491,7 +503,8 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
 
 function createArrivalCard(arrival) {
     const statusClass = getStatusClass(arrival.status);
-    const cardClass = statusClass === 'on-time' ? '' : statusClass;
+    const isScheduled = arrival.prediction_type === 'scheduled' || arrival.is_live === false;
+    const cardClass = isScheduled ? 'schedule-card' : (statusClass === 'on-time' ? '' : statusClass);
 
     // Show "Arriving Now" for buses less than 1 minute away
     const isApproaching = arrival.minutes < 1;
@@ -500,10 +513,15 @@ function createArrivalCard(arrival) {
     const approachingClass = isApproaching ? 'approaching' : '';
 
     // Handle both field names: 'time' and 'arrival_time'
-    const scheduledTime = arrival.time || arrival.arrival_time || 'N/A';
+    const predictedTime = arrival.time || arrival.arrival_time || 'N/A';
+    const scheduledTime = arrival.scheduled_time;
+    const timeLabel = isScheduled
+        ? `Scheduled: ${scheduledTime || predictedTime}`
+        : `Predicted: ${predictedTime}${scheduledTime ? ` • Scheduled: ${scheduledTime}` : ''}`;
 
     // Show route number if available (for multi-route at West View)
     const routeLabel = arrival.route ? `Route ${arrival.route} • ` : '';
+    const tripLabel = arrival.vehicle_id ? `Bus #${arrival.vehicle_id}` : 'Scheduled trip';
 
     return `
         <div class="arrival-card ${cardClass} ${approachingClass}">
@@ -512,8 +530,8 @@ function createArrivalCard(arrival) {
                 <div class="minutes-label">${minutesLabel}</div>
             </div>
             <div class="arrival-info">
-                <h3>${routeLabel}Bus #${arrival.vehicle_id || 'N/A'}</h3>
-                <div class="arrival-time">Scheduled: ${scheduledTime}</div>
+                <h3>${routeLabel}${tripLabel}</h3>
+                <div class="arrival-time">${timeLabel}</div>
             </div>
             <div class="status-badge ${statusClass}">
                 ${isApproaching ? 'Arriving Now' : arrival.status}
@@ -523,6 +541,7 @@ function createArrivalCard(arrival) {
 }
 
 function getStatusClass(status) {
+    if (status.includes('Scheduled')) return 'schedule';
     if (status.includes('On Time')) return 'on-time';
     if (status.includes('Delayed')) return 'delayed';
     if (status.includes('Early')) return 'early';

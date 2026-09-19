@@ -91,7 +91,7 @@ class TestTrueTimeResponseFormatting:
         assert result["stop_number"] == "1016"
         assert result["stop_numbers"] == {"outbound": "1016", "inbound": "1016"}
         assert result["stops"] == [
-            {"id": "1016", "name": "Center Ave + Chalfonte Ave", "direction": "BOTH"},
+            {"id": "1016", "name": "Center Ave + Chalfonte Ave", "direction": "INBOUND"},
         ]
         assert result["predictions"]["to_west_view"]["stop_number"] == "1016"
         assert result["predictions"]["to_downtown"]["stop_number"] == "1016"
@@ -148,36 +148,64 @@ class TestTrueTimeResponseFormatting:
         
         assert result_1016["stop_name"] == "Center Ave + Chalfonte Ave"
         assert result_1016["stop_number"] == "1016"
-        assert result_619["stop_name"] == "West View Plaza + Giant Eagle"
+        assert result_619["stop_name"] == "West View Plaza Fire Lane + Giant Eagle"
         assert result_619["stop_number"] == "619"
 
     @patch('api.requests.get')
     @patch('api.PAAC_API_KEY', 'test-key')
-    def test_official_stop_names_are_loaded_by_stop_id(self, mock_get):
-        """Official names should remain distinct and keyed by physical stop ID."""
+    def test_configured_official_stop_names_do_not_require_api(self, mock_get):
+        """Bundled GTFS names should remain available without a network lookup."""
         _stop_metadata_cache.update({"expires_at": 0, "names": {}})
-        response = MagicMock()
-        response.json.return_value = {
-            "bustime-response": {
-                "stops": [
-                    {"stpid": "620", "stpnm": "Northbound Main St"},
-                    {"stpid": "618", "stpnm": "Southbound Main St"},
-                ]
-            }
+
+        names = _get_official_stop_names("13", ["618", "733"])
+
+        assert names == {
+            "618": "West View Park Dr + West View Towers",
+            "733": "West View Park Dr + West View Tower",
         }
-        mock_get.return_value = response
-
-        names = _get_official_stop_names("13", ["620", "618"])
-
-        assert names == {"620": "Northbound Main St", "618": "Southbound Main St"}
-        assert mock_get.call_count == 1
+        mock_get.assert_not_called()
 
     @patch('api.PAAC_API_KEY', '')
-    def test_missing_api_key_falls_back_without_lookup(self):
-        """Missing metadata credentials must not affect the existing app flow."""
+    def test_missing_api_key_uses_bundled_names(self):
+        """Missing credentials must not remove the official stop names."""
         _stop_metadata_cache.update({"expires_at": 0, "names": {}})
 
-        assert _get_official_stop_names("13", ["620", "618"]) == {}
+        assert _get_official_stop_names("13", ["620", "618"]) == {
+            "618": "West View Park Dr + West View Towers",
+            "620": "West View Plaza Fire Lane + U-Haul",
+        }
+
+
+class TestPredictionFallback:
+    """Test source selection when one PRT feed has no arrivals."""
+
+    @patch('api.get_predictions_static')
+    @patch('api.get_predictions_gtfsrt')
+    @patch('api.get_predictions_truetime')
+    def test_empty_truetime_response_falls_through_to_gtfsrt(
+        self,
+        mock_truetime,
+        mock_gtfsrt,
+        mock_static,
+    ):
+        mock_truetime.return_value = {
+            "predictions": {
+                "to_west_view": {"arrivals": []},
+                "to_downtown": {"arrivals": []},
+            }
+        }
+        mock_gtfsrt.return_value = {
+            "data_source": "gtfs-rt",
+            "predictions": {
+                "to_west_view": {"arrivals": [{"minutes": 10}]},
+                "to_downtown": {"arrivals": []},
+            },
+        }
+
+        result = get_predictions_with_fallback("13", "1009")
+
+        assert result["data_source"] == "gtfs-rt"
+        mock_static.assert_not_called()
 
 
 class TestAPIEndpoints:
@@ -269,8 +297,8 @@ class TestRouteStopCompatibility:
     def test_route_13_serves_both_stops(self):
         """Route 13 should serve both stops"""
         compatibility = {
-            '8': ['619'],
-            '13': ['1016', '619', '620', '618']
+            '8': ['618', '619', '620', '733'],
+            '13': ['1016', '619', '620', '618', '733']
         }
         
         assert '1016' in compatibility['13']
@@ -278,14 +306,16 @@ class TestRouteStopCompatibility:
         assert '620' in compatibility['13']
         assert '618' in compatibility['13']
     
-    def test_route_8_only_west_view(self):
-        """Route 8 should only serve West View Plaza"""
+    def test_route_8_serves_west_view_stops_but_not_center_ave(self):
+        """Route 8 shares the West View stops but not Center Avenue."""
         compatibility = {
-            '8': ['619'],
-            '13': ['1016', '619', '620', '618']
+            '8': ['618', '619', '620', '733'],
+            '13': ['1016', '619', '620', '618', '733']
         }
-        
+
         assert '619' in compatibility['8']
+        assert '618' in compatibility['8']
+        assert '733' in compatibility['8']
         assert '1016' not in compatibility['8']
 
 

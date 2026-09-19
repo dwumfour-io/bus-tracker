@@ -1,6 +1,7 @@
 # 🚌 Pittsburgh Bus Tracker
 
-Real-time bus arrival tracker for Pittsburgh Port Authority buses using the TrueTime API.
+Real-time bus arrival tracker for Pittsburgh Regional Transit using TrueTime,
+GTFS-Realtime, and the official static GTFS schedule.
 
 ![CI](https://github.com/jdwumfour/bus-tracker/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
@@ -13,11 +14,10 @@ Real-time bus arrival tracker for Pittsburgh Port Authority buses using the True
 |-------|------|-----------|----------------|
 | 13 | stop_1009 | Center Ave + Chalfonte Ave | 1009 |
 | 13 | stop_1016 | Center Ave + Chalfonte Ave | 1016 |
-| 13 | westview | West View Plaza + Giant Eagle | 619 |
-| 13 | stop_620 | Stop 620 | 620 |
-| 13 | stop_1020 | Stop 1020 | 1020 |
-| 13 | stop_618 | Stop 618 | 618 |
-| 8 | westview | West View Plaza + Giant Eagle | 619 |
+| 13 | westview | West View Plaza Fire Lane + Giant Eagle | 619 |
+| 13 | stop_620 | West View Plaza Fire Lane + U-Haul | 620 |
+| 13 | stop_618 | West View Park Dr + West View Towers | 618 westbound / 733 downtown-bound |
+| 8 | westview, stop_620, stop_618 | West View stops | 619, 620, 618 / 733 |
 
 **Destinations Tracked:**
 - ➡️ **West View:** West View Plaza Fire Lane + Giant Eagle
@@ -73,16 +73,27 @@ docker-compose up -d
 |----------|-------------|
 | `GET /` | Main web interface (PWA) |
 | `GET /health` | Health check |
-| `GET /predictions?route=13&stop=chalfonte` | Arrival predictions for a route/stop |
+| `GET /predictions?route=13&stop=stop_1009` | Arrival predictions for a route/stop |
 | `GET /predictions/multi?stop=westview` | Multi-route predictions (Route 8 + 13) |
 | `GET /alerts?route=13` | Service alerts |
 
-### Example Response: `/predictions?route=13&stop=chalfonte`
+### Data Source Priority
+
+1. TrueTime predictions
+2. GTFS-Realtime TripUpdates when TrueTime has no arrivals
+3. Static GTFS scheduled times when neither live source has an arrival
+
+Scheduled-only results are labeled `Scheduled` and return `is_live: false`.
+GTFS-Realtime results include both `time` and `scheduled_time` when the trip can
+be matched to the static feed, allowing the tracker to report early or late service.
+
+### Example Response: `/predictions?route=13&stop=stop_1009`
 
 ```json
 {
   "stop_name": "Center Ave + Chalfonte Ave",
-  "stop_numbers": {"outbound": "1009", "inbound": "1016"},
+  "stop_number": "1009",
+  "stop_numbers": {"outbound": "1009", "inbound": "1009"},
   "route": "13",
   "last_updated": "06:15:32 PM",
   "data_source": "truetime",
@@ -98,13 +109,7 @@ docker-compose up -d
         {"minutes": 18, "time": "06:33 PM", "vehicle_id": "6310", "status": "On Time"}
       ]
     },
-    "to_downtown": {
-      "destination": "Downtown Pittsburgh",
-      "direction": "INBOUND",
-      "arrivals": [
-        {"minutes": 3, "time": "06:18 PM", "vehicle_id": "6512", "status": "On Time"}
-      ]
-    }
+    "to_downtown": {"destination": "Downtown Pittsburgh", "arrivals": []}
   }
 }
 ```
@@ -113,7 +118,7 @@ docker-compose up -d
 
 ```json
 {
-  "stop_name": "West View Plaza + Giant Eagle",
+  "stop_name": "West View Plaza Fire Lane + Giant Eagle",
   "stop_number": "619",
   "stop_numbers": {"outbound": "619", "inbound": "619"},
   "routes": ["8", "13"],
@@ -135,6 +140,9 @@ docker-compose up -d
 ```
 bus-tracker/
 ├── api.py              # Flask API + static file serving
+├── gtfs_static.py      # Static schedule and stop metadata reader
+├── gtfs/               # Filtered official GTFS feed for Routes 8 and 13
+├── scripts/            # GTFS subset build utility
 ├── index.html          # Frontend UI
 ├── app.js              # Frontend JavaScript
 ├── style.css           # Styling
@@ -170,11 +178,24 @@ bus-tracker/
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PAAC_API_KEY` | TrueTime API key | (required) |
-| `STOP_ID` | Default stop ID | 1016 |
+| `STOP_ID` | Default stop ID | 1009 |
 | `BUS_ROUTE` | Default route | 13 |
 | `API_PORT` | Server port | 5001 |
 | `FLASK_DEBUG` | Enable debug mode | false |
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated) | http://localhost:5001 |
+
+## Updating the Static GTFS Feed
+
+Download and extract PRT's current static feed, then rebuild the small archive
+used by the app:
+
+```bash
+python scripts/build_gtfs_subset.py /path/to/GTFS \
+  --output gtfs/google_transit.zip --routes 8 13
+```
+
+The bundled feed currently covers `2026-06-28` through `2026-10-14`. Rebuild it
+when PRT publishes a new schedule so scheduled fallback times remain current.
 
 ---
 
