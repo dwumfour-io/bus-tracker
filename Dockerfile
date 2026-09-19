@@ -22,6 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all application files (static files needed for Flask)
 COPY api.py .
+COPY gtfs_static.py .
+COPY gtfs ./gtfs
 COPY index.html .
 COPY app.js .
 COPY style.css .
@@ -41,4 +43,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run with gunicorn for production
 CMD ["gunicorn", "api:app", "--bind", "0.0.0.0:5001", "--workers", "2", "--timeout", "30"]
-
