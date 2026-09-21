@@ -16,8 +16,9 @@ GTFS-Realtime, and the official static GTFS schedule.
 | 13 | stop_1016 | Center Ave + Chalfonte Ave | 1016 |
 | 13 | westview | West View Plaza Fire Lane + Giant Eagle | 619 |
 | 13 | stop_620 | West View Plaza Fire Lane + U-Haul | 620 |
-| 13 | stop_618 | West View Park Dr + West View Towers | 618 westbound / 733 downtown-bound |
-| 8 | westview, stop_620, stop_618 | West View stops | 619, 620, 618 / 733 |
+| 13 | stop_618 | West View Park Dr + West View Towers | 618 |
+| 13 | stop_733 | West View Park Dr + West View Tower | 733 |
+| 8 | westview, stop_620, stop_618, stop_733 | West View stops | 619, 620, 618, 733 |
 
 **Destinations Tracked:**
 - ➡️ **West View:** West View Plaza Fire Lane + Giant Eagle
@@ -107,6 +108,11 @@ departure rather than a generic time-of-day guess:
 
 `state` is one of `scheduled_only` (a later bus runs today), `service_ended`
 (nothing more today), or `unavailable` (schedule data couldn't be checked).
+
+Scheduled-only arrival cards are only shown up to 2 hours out
+(`SCHEDULED_ARRIVAL_HORIZON_HOURS` in `api.py`) - a trip 5 hours away isn't a
+useful "arrival," so anything past that window is left to the
+`service_status` message instead.
 
 ### Prediction Freshness
 

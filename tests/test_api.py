@@ -19,11 +19,13 @@ from api import (
     _format_status,
     _format_truetime_response,
     get_predictions_with_fallback,
+    get_predictions_static,
     _get_official_stop_names,
     _stop_metadata_cache,
     _direction_service_status,
     _parse_truetime_timestamp,
     _feed_expiry_status,
+    SCHEDULED_ARRIVAL_HORIZON_HOURS,
 )
 
 
@@ -412,6 +414,21 @@ class TestFeedExpiryStatus:
         assert "valid_through" in status
         assert "expires_soon" in status
         assert "expired" in status
+
+
+class TestScheduledArrivalHorizon:
+    """A scheduled trip hours away isn't a useful arrival card."""
+
+    @patch('api.STATIC_GTFS')
+    def test_static_lookup_uses_the_tightened_horizon(self, mock_static_gtfs):
+        mock_static_gtfs.available = True
+        mock_static_gtfs.upcoming_arrivals.return_value = []
+
+        get_predictions_static("13", "stop_618")
+
+        for call in mock_static_gtfs.upcoming_arrivals.call_args_list:
+            assert call.kwargs["horizon_hours"] == SCHEDULED_ARRIVAL_HORIZON_HOURS
+        assert SCHEDULED_ARRIVAL_HORIZON_HOURS <= 2
 
 
 class TestObservationsEndpoint:

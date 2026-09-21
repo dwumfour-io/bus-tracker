@@ -38,19 +38,24 @@ const stopMetadata = {
     },
     stop_618: {
         name: 'West View Park Dr + West View Towers',
-        names: {
-            to_west_view: 'West View Park Dr + West View Towers',
-            to_downtown: 'West View Park Dr + West View Tower'
-        },
-        numbers: { outbound: '618', inbound: '733' },
-        directions: ['to_west_view', 'to_downtown']
+        names: { to_west_view: 'West View Park Dr + West View Towers' },
+        numbers: { outbound: '618', inbound: '618' },
+        directions: ['to_west_view'],
+        alternate: { direction: 'to_downtown', stopNumber: '733' }
+    },
+    stop_733: {
+        name: 'West View Park Dr + West View Tower',
+        names: { to_downtown: 'West View Park Dr + West View Tower' },
+        numbers: { outbound: '733', inbound: '733' },
+        directions: ['to_downtown'],
+        alternate: { direction: 'to_west_view', stopNumber: '618' }
     }
 };
 
 // Route-stop compatibility mapping
 const routeStopCompatibility = {
-    '8': ['stop_618', 'westview', 'stop_620'],
-    '13': ['stop_1009', 'stop_1016', 'stop_618', 'westview', 'stop_620']
+    '8': ['stop_618', 'stop_733', 'westview', 'stop_620'],
+    '13': ['stop_1009', 'stop_1016', 'stop_618', 'stop_733', 'westview', 'stop_620']
 };
 
 function formatStopNumbers(stopNumbers) {

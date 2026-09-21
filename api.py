@@ -83,6 +83,10 @@ GTFS_REFRESH_CHECK_INTERVAL = 24 * 60 * 60  # look for a newer feed once a day
 GTFS_EXPIRY_WARNING_DAYS = 14
 _gtfs_refresh_state = {"checked_at": 0}
 
+# A scheduled-only trip more than this far out isn't a useful arrival card -
+# the service_status message covers "next bus" beyond this window instead.
+SCHEDULED_ARRIVAL_HORIZON_HOURS = 2
+
 # Where we log prediction snapshots and rider-reported arrivals (item 6).
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "data/history.db")
 history_store.init_db(HISTORY_DB_PATH)
@@ -125,12 +129,13 @@ STOP_CONFIGS = {
     },
     "stop_618": {
         "name": "West View Park Dr + West View Towers",
-        "names": {
-            "outbound": "West View Park Dr + West View Towers",
-            "inbound": "West View Park Dr + West View Tower",
-        },
-        "numbers": {"outbound": "618", "inbound": "733"},
-        "directions": ["to_west_view", "to_downtown"],
+        "numbers": {"outbound": "618", "inbound": "618"},
+        "directions": ["to_west_view"],
+    },
+    "stop_733": {
+        "name": "West View Park Dr + West View Tower",
+        "numbers": {"outbound": "733", "inbound": "733"},
+        "directions": ["to_downtown"],
     },
 }
 VALID_STOPS = list(STOP_CONFIGS.keys())
@@ -768,7 +773,12 @@ def get_predictions_gtfsrt(route=None, stop=None):
 
 
 def get_predictions_static(route=None, stop=None):
-    """Return upcoming scheduled service when no live prediction is available."""
+    """Return upcoming scheduled service when no live prediction is available.
+
+    Capped to a 2-hour horizon - a scheduled trip 5 hours out isn't a useful
+    "arrival" card. Anything farther out is left to the service_status
+    message instead (see _direction_service_status).
+    """
     if not STATIC_GTFS.available:
         return None
 
@@ -780,7 +790,9 @@ def get_predictions_static(route=None, stop=None):
     arrivals = {"to_west_view": [], "to_downtown": []}
 
     for stop_id in stop_directions:
-        for scheduled in STATIC_GTFS.upcoming_arrivals(selected_route, stop_id, now, limit=5):
+        for scheduled in STATIC_GTFS.upcoming_arrivals(
+            selected_route, stop_id, now, limit=5, horizon_hours=SCHEDULED_ARRIVAL_HORIZON_HOURS
+        ):
             direction_key = _arrival_direction(
                 stop_id,
                 scheduled["trip_id"],
