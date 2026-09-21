@@ -9,6 +9,7 @@ let autoRefreshInterval = null;
 let currentData = null;
 let currentRoute = '13';
 let currentStop = 'stop_1009';
+let activeTab = 'both';
 
 const stopMetadata = {
     stop_1009: {
@@ -253,6 +254,7 @@ function initializeTabs() {
     tabButtons.forEach(button => {
         button.addEventListener('click', () => {
             const targetTab = button.dataset.tab;
+            activeTab = targetTab;
 
             // Update active states
             tabButtons.forEach(btn => btn.classList.remove('active'));
@@ -272,6 +274,7 @@ function initializeTabs() {
 function initializeControls() {
     const autoRefreshToggle = document.getElementById('auto-refresh');
     const refreshBtn = document.getElementById('refresh-btn');
+    const logArrivalBtn = document.getElementById('log-arrival-btn');
 
     autoRefreshToggle.addEventListener('change', (e) => {
         if (e.target.checked) {
@@ -284,6 +287,45 @@ function initializeControls() {
     refreshBtn.addEventListener('click', () => {
         fetchPredictions();
     });
+
+    if (logArrivalBtn) {
+        logArrivalBtn.addEventListener('click', () => logBusArrival(logArrivalBtn));
+    }
+}
+
+// Record a rider-reported "bus arrived" observation (kept separate from
+// predictions, since a prediction is a forecast and this is what actually
+// happened).
+async function logBusArrival(button) {
+    const direction = activeTab === 'westview' ? 'to_west_view'
+        : activeTab === 'downtown' ? 'to_downtown'
+        : null;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Logging...';
+
+    try {
+        const response = await fetch(`${API_URL}/observations`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                route: currentRoute,
+                stop: currentStop,
+                direction,
+                note: 'Bus arrived',
+            }),
+        });
+
+        button.textContent = response.ok ? 'Logged!' : 'Could not log';
+    } catch (error) {
+        button.textContent = 'Could not log';
+    } finally {
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.disabled = false;
+        }, 2000);
+    }
 }
 
 // Auto-refresh management
@@ -398,20 +440,52 @@ function renderArrivals(data) {
     const directions = data.directions || stopMetadata[currentStop]?.directions || [];
 
     updateDirectionStopNumbers(data.predictions);
+    updateFreshnessDisplay(data.source_age_seconds);
+    updateFeedExpiryBanner(data.feed_expiry);
 
     // Check if at terminus (West View Plaza)
     const isAtWestView = currentStop === 'westview';
 
     // Render for "Both Directions" tab
-    renderDirectionList('westview-arrivals', westviewData.arrivals, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
-    renderDirectionList('downtown-arrivals', downtownData.arrivals, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
+    renderDirectionList('westview-arrivals', westviewData, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('downtown-arrivals', downtownData, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
 
     // Render for individual tabs
-    renderDirectionList('westview-arrivals-single', westviewData.arrivals, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
-    renderDirectionList('downtown-arrivals-single', downtownData.arrivals, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
+    renderDirectionList('westview-arrivals-single', westviewData, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('downtown-arrivals-single', downtownData, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
 }
 
-function renderDirectionList(containerId, arrivals, isServed, direction, terminus = null, expectedHeadway = null) {
+function updateFreshnessDisplay(sourceAgeSeconds) {
+    const elements = document.querySelectorAll('[data-freshness]');
+    if (sourceAgeSeconds === null || sourceAgeSeconds === undefined) {
+        elements.forEach((element) => { element.textContent = ''; });
+        return;
+    }
+
+    const label = sourceAgeSeconds < 5
+        ? 'PRT updated just now'
+        : `PRT updated ${sourceAgeSeconds} second${sourceAgeSeconds === 1 ? '' : 's'} ago`;
+    elements.forEach((element) => { element.textContent = label; });
+}
+
+function updateFeedExpiryBanner(feedExpiry) {
+    const banner = document.getElementById('feed-expiry-banner');
+    if (!banner) return;
+
+    if (!feedExpiry || (!feedExpiry.expires_soon && !feedExpiry.expired)) {
+        banner.style.display = 'none';
+        return;
+    }
+
+    banner.textContent = feedExpiry.expired
+        ? `⚠️ The bundled PRT schedule expired ${feedExpiry.valid_through}. Scheduled-only arrivals may be wrong until it's updated.`
+        : `ℹ️ The bundled PRT schedule expires ${feedExpiry.valid_through}. It will need to be refreshed soon.`;
+    banner.style.display = 'block';
+}
+
+function renderDirectionList(containerId, directionData, isServed, direction, terminus = null, expectedHeadway = null) {
+    const arrivals = directionData.arrivals;
+
     if (!isServed) {
         const container = document.getElementById(containerId);
         const alternate = stopMetadata[currentStop]?.alternate;
@@ -436,10 +510,10 @@ function renderDirectionList(containerId, arrivals, isServed, direction, terminu
         return;
     }
 
-    renderArrivalList(containerId, arrivals, terminus, expectedHeadway);
+    renderArrivalList(containerId, arrivals, terminus, expectedHeadway, directionData.service_status);
 }
 
-function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadway = null) {
+function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadway = null, serviceStatus = null) {
     const container = document.getElementById(containerId);
 
     // Show terminus message FIRST if at end of line (regardless of arrivals)
@@ -462,6 +536,35 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
     }
 
     if (!arrivals || arrivals.length === 0) {
+        // Explain the gap using the actual next scheduled trip, not a
+        // generic time-of-day guess.
+        const stateIcon = { service_ended: '🌙', scheduled_only: '🕐', unavailable: '❓' };
+        const stateLabel = { service_ended: 'Ended for today', scheduled_only: 'Scheduled', unavailable: 'Unavailable' };
+        const stateTitle = {
+            service_ended: 'Service has ended',
+            scheduled_only: 'Live tracking unavailable',
+            unavailable: 'Live tracking unavailable',
+        };
+
+        if (serviceStatus) {
+            const state = serviceStatus.state;
+            container.innerHTML = `
+                <div class="arrival-card schedule-card">
+                    <div class="minutes-display schedule-icon">
+                        <div class="minutes-number">${stateIcon[state] || '❓'}</div>
+                        <div class="minutes-label">&nbsp;</div>
+                    </div>
+                    <div class="arrival-info">
+                        <h3>${stateTitle[state] || 'Live tracking unavailable'}</h3>
+                        <div class="arrival-time">${serviceStatus.message}</div>
+                    </div>
+                    <div class="status-badge schedule">
+                        ${stateLabel[state] || 'Unavailable'}
+                    </div>
+                </div>`;
+            return;
+        }
+
         // Show expected headway if available
         if (expectedHeadway) {
             container.innerHTML = `
@@ -498,6 +601,7 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
         return;
     }
 
+
     container.innerHTML = arrivals.map(arrival => createArrivalCard(arrival)).join('');
 }
 
@@ -515,9 +619,11 @@ function createArrivalCard(arrival) {
     // Handle both field names: 'time' and 'arrival_time'
     const predictedTime = arrival.time || arrival.arrival_time || 'N/A';
     const scheduledTime = arrival.scheduled_time;
-    const timeLabel = isScheduled
-        ? `Scheduled: ${scheduledTime || predictedTime}`
-        : `Predicted: ${predictedTime}${scheduledTime ? ` • Scheduled: ${scheduledTime}` : ''}`;
+    const timeLabel = arrival.note
+        ? `${scheduledTime || predictedTime} scheduled · live tracking unavailable`
+        : (isScheduled
+            ? `Scheduled: ${scheduledTime || predictedTime}`
+            : `Predicted: ${predictedTime}${scheduledTime ? ` • Scheduled: ${scheduledTime}` : ''}`);
 
     // Show route number if available (for multi-route at West View)
     const routeLabel = arrival.route ? `Route ${arrival.route} • ` : '';

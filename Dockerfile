@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all application files (static files needed for Flask)
 COPY api.py .
 COPY gtfs_static.py .
+COPY history_store.py .
 COPY gtfs ./gtfs
 COPY index.html .
 COPY app.js .

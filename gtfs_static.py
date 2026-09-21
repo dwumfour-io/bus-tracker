@@ -158,6 +158,34 @@ class GTFSStaticData:
             })
         return result
 
+    def next_departure(self, route_id, stop_id, now, search_days=14):
+        """Return the earliest scheduled departure at/after `now`, no horizon cap.
+
+        Used to explain empty results: is service over for today, or is the
+        next bus just further out than the normal arrival-board horizon?
+        """
+        if not self.available:
+            return None
+
+        records = self.departures.get((str(route_id), str(stop_id)), [])
+        if not records:
+            return None
+
+        for day_offset in range(search_days):
+            service_date = now.date() + timedelta(days=day_offset)
+            candidates = []
+            for record in records:
+                if not self._service_active(record["service_id"], service_date):
+                    continue
+                scheduled = self._scheduled_datetime(service_date, record["time"], now.tzinfo)
+                if scheduled >= now:
+                    candidates.append((scheduled, record))
+            if candidates:
+                candidates.sort(key=lambda item: item[0])
+                scheduled, record = candidates[0]
+                return {**record, "scheduled_datetime": scheduled}
+        return None
+
     def scheduled_datetime_for_prediction(self, trip_id, stop_id, predicted):
         record = self.trip_stop_times.get((str(trip_id), str(stop_id)))
         if not record:

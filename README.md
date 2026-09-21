@@ -76,16 +76,55 @@ docker-compose up -d
 | `GET /predictions?route=13&stop=stop_1009` | Arrival predictions for a route/stop |
 | `GET /predictions/multi?stop=westview` | Multi-route predictions (Route 8 + 13) |
 | `GET /alerts?route=13` | Service alerts |
+| `POST /observations` | Log a rider-reported observation, e.g. `{"route": "13", "stop": "stop_1009", "note": "Bus arrived"}` |
 
 ### Data Source Priority
 
 1. TrueTime predictions
 2. GTFS-Realtime TripUpdates when TrueTime has no arrivals
-3. Static GTFS scheduled times when neither live source has an arrival
+3. Static GTFS scheduled trips are then merged in alongside whichever live
+   source responded, so a scheduled bus that a live feed hasn't picked up
+   yet stays visible instead of silently disappearing. Those merged entries
+   are marked with `"note": "Scheduled · live tracking unavailable"`.
 
 Scheduled-only results are labeled `Scheduled` and return `is_live: false`.
 GTFS-Realtime results include both `time` and `scheduled_time` when the trip can
 be matched to the static feed, allowing the tracker to report early or late service.
+A delay that couldn't be measured (no matching scheduled trip) is reported as
+`"Delay unknown"` rather than being assumed on-time.
+
+When a direction has no arrivals at all, the response includes a
+`service_status` object explaining why, based on the *actual* next scheduled
+departure rather than a generic time-of-day guess:
+
+```json
+"service_status": {
+  "state": "service_ended",
+  "message": "Service has ended for today. Next scheduled bus: 5:32 AM tomorrow.",
+  "next_departure": "2026-09-22T05:32:00-04:00"
+}
+```
+
+`state` is one of `scheduled_only` (a later bus runs today), `service_ended`
+(nothing more today), or `unavailable` (schedule data couldn't be checked).
+
+### Prediction Freshness
+
+Every response includes `source_age_seconds`: how many seconds old the live
+data is, based on the *source's* own timestamp (TrueTime's `tmstmp`, or the
+GTFS-Realtime feed's header timestamp) - not when your browser last polled
+the API. It's `null` when only the static schedule is available.
+
+### Static Feed Expiry
+
+Every response and `/health` include a `feed_expiry` object:
+
+```json
+"feed_expiry": {"valid_through": "2026-10-14", "expires_soon": false, "expired": false}
+```
+
+The UI shows a banner once the feed is within 14 days of `valid_through` (or
+past it).
 
 ### Example Response: `/predictions?route=13&stop=stop_1009`
 
@@ -183,6 +222,11 @@ bus-tracker/
 | `API_PORT` | Server port | 5001 |
 | `FLASK_DEBUG` | Enable debug mode | false |
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated) | http://localhost:5001 |
+| `GTFS_STATIC_FEED_URL` | Direct URL to PRT's current static GTFS zip; when set, the app checks for a newer feed once a day and only swaps it in after validating the download | (empty; auto-refresh off) |
+| `HISTORY_DB_PATH` | Where to store the prediction/observation history SQLite database | `data/history.db` |
+
+Get the current static feed URL from [PRT's developer resources page](https://www.rideprt.org/business-center/developer-resources/) -
+we don't hardcode it since PRT can change it without notice.
 
 ## Updating the Static GTFS Feed
 
@@ -196,6 +240,24 @@ python scripts/build_gtfs_subset.py /path/to/GTFS \
 
 The bundled feed currently covers `2026-06-28` through `2026-10-14`. Rebuild it
 when PRT publishes a new schedule so scheduled fallback times remain current.
+Set `GTFS_STATIC_FEED_URL` to have the app check for and validate a newer feed
+automatically once a day instead.
+
+## 📊 Trip History
+
+The app logs two things to a small SQLite database (`data/history.db` by
+default, override with `HISTORY_DB_PATH`):
+
+- **Observed predictions** - a periodic snapshot of scheduled times,
+  live prediction changes, source, and any missing-data periods.
+- **Rider observations** - taps of the "🚌 Log bus arrival" button, recorded
+  via `POST /observations`.
+
+These are stored in separate tables on purpose: predictions are forecasts,
+not measurements of what actually happened. Once enough rider observations
+exist, they can be compared against the logged predictions to estimate
+on-time performance by weekday and time of day - that comparison isn't
+built yet, this just collects the data needed for it.
 
 ---
 

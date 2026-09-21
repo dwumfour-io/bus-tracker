@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=1.0.9">
+    <link rel="stylesheet" href="style.css?v=1.1.0">
 </head>
 <body>
     <!-- Header -->
@@ -71,7 +71,13 @@
                 <span class="status-label">Data Source:</span>
                 <span id="data-source" class="status-value">--</span>
             </div>
+            <div class="status-item">
+                <span id="freshness-display" class="status-value" data-freshness aria-live="polite"></span>
+            </div>
         </div>
+
+        <!-- Static schedule expiry warning -->
+        <div id="feed-expiry-banner" class="feed-expiry-banner" style="display: none;" role="alert"></div>
 
         <!-- Service Alerts Banner -->
         <div id="alerts-container" class="alerts-container" style="display: none;">
@@ -91,6 +97,7 @@
                 <span class="toggle-label">Auto-refresh (30s)</span>
             </label>
             <button id="refresh-btn" class="btn-primary">🔄 Refresh Now</button>
+            <button id="log-arrival-btn" class="btn-secondary" type="button" title="Log that a bus actually arrived, for your own records">🚌 Log bus arrival</button>
         </div>
 
         <!-- Tabs -->
@@ -200,6 +207,6 @@
         </div>
     </footer>
 
-    <script src="app.js?v=1.1.0"></script>
+    <script src="app.js?v=1.2.0"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 // Pittsburgh Bus Tracker - Service Worker
 // Bump this version to force clients to refresh on new deployments
-const CACHE_VERSION = 12;
+const CACHE_VERSION = 13;
 const CACHE_NAME = `pgh-bus-tracker-v${CACHE_VERSION}`;
 const STATIC_ASSETS = [
   '/',

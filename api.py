@@ -9,7 +9,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import requests
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import logging
 import time
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from google.transit import gtfs_realtime_pb2
 from gtfs_static import load_gtfs
+import history_store
 
 # Pittsburgh timezone
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -73,6 +74,20 @@ _stop_metadata_cache = {"expires_at": 0, "names": {}}
 GTFSRT_CACHE_TTL = 15
 _gtfsrt_feed_cache = {"expires_at": 0, "feed": None}
 STATIC_GTFS = load_gtfs()
+
+# Optional automatic static-schedule refresh. Off unless a feed URL is
+# configured, since we won't guess PRT's download URL for you - grab the
+# current one from https://www.rideprt.org/business-center/developer-resources/
+GTFS_STATIC_FEED_URL = os.environ.get("GTFS_STATIC_FEED_URL", "")
+GTFS_REFRESH_CHECK_INTERVAL = 24 * 60 * 60  # look for a newer feed once a day
+GTFS_EXPIRY_WARNING_DAYS = 14
+_gtfs_refresh_state = {"checked_at": 0}
+
+# Where we log prediction snapshots and rider-reported arrivals (item 6).
+HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "data/history.db")
+history_store.init_db(HISTORY_DB_PATH)
+_last_snapshot_at = {}
+SNAPSHOT_MIN_INTERVAL_SECONDS = 25
 
 # Bus 13 Configuration
 BUS_ROUTE = os.environ.get("BUS_ROUTE", "13")
@@ -370,15 +385,31 @@ def _minutes_until(arrival_epoch):
 
 
 def _format_status(delay_seconds: int | None) -> str:
-    """Turn delay seconds into a short status label."""
+    """Turn delay seconds into a short status label.
+
+    A missing delay reading is not the same thing as an on-time bus - we
+    just couldn't match this prediction to a scheduled trip to measure it.
+    """
     if delay_seconds is None:
-        return "On Time"
+        return "Delay unknown"
     minutes = round(delay_seconds / 60)
     if minutes > 0:
         return f"Delayed +{minutes} min"
     if minutes < 0:
         return f"Early {abs(minutes)} min"
     return "On Time"
+
+
+def _parse_truetime_timestamp(value):
+    """Parse TrueTime's 'tmstmp' (prediction-generated-at) field, if present."""
+    if not value:
+        return None
+    for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d %H:%M"):
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=EASTERN_TZ)
+        except ValueError:
+            continue
+    return None
 
 
 def get_predictions_truetime(route=None, stop=None):
@@ -450,6 +481,7 @@ def _format_truetime_response(data, route=None, stop=None):
 
         to_west_view = []
         to_downtown = []
+        latest_source_dt = None
 
         for pred in pred_list:
             # Filter by route - only include predictions for the requested route
@@ -464,6 +496,10 @@ def _format_truetime_response(data, route=None, stop=None):
             status = "Scheduled" if prediction_type == "scheduled" else (
                 "Delayed" if is_delayed else "On Time"
             )
+
+            generated_at = _parse_truetime_timestamp(pred.get("tmstmp"))
+            if generated_at and (latest_source_dt is None or generated_at > latest_source_dt):
+                latest_source_dt = generated_at
 
             # Use the countdown from API (already in minutes)
             minutes = int(pred.get("prdctdn", 0))
@@ -501,6 +537,10 @@ def _format_truetime_response(data, route=None, stop=None):
             return _empty_predictions_response(display_stop_name, selected_route, selected_stop)
 
         now_label = datetime.now(EASTERN_TZ).strftime("%I:%M:%S %p")
+        source_age_seconds = (
+            round((datetime.now(EASTERN_TZ) - latest_source_dt).total_seconds())
+            if latest_source_dt else None
+        )
 
         return {
             "stop_name": display_stop_name,
@@ -511,6 +551,7 @@ def _format_truetime_response(data, route=None, stop=None):
             "route": selected_route,
             "last_updated": now_label,
             "data_source": "truetime",
+            "source_age_seconds": source_age_seconds,
             "is_live": any(
                 arrival["is_live"] for arrival in to_west_view + to_downtown
             ),
@@ -689,6 +730,10 @@ def get_predictions_gtfsrt(route=None, stop=None):
         logger.info(f"GTFS-RT: Found {len(outbound_arrivals)} outbound, {len(inbound_arrivals)} inbound arrivals")
 
         headway, period = _get_expected_headway(route)
+        feed_age_seconds = (
+            max(0, round(now_epoch - feed.header.timestamp))
+            if feed.header.timestamp else None
+        )
 
         return {
             "stop_name": stop_name,
@@ -697,6 +742,7 @@ def get_predictions_gtfsrt(route=None, stop=None):
             "route": route,
             "last_updated": now_label,
             "data_source": "gtfs-rt",
+            "source_age_seconds": feed_age_seconds,
             "is_live": bool(outbound_arrivals or inbound_arrivals),
             "expected_headway": headway,
             "schedule_period": period,
@@ -801,23 +847,112 @@ def _has_arrivals(data):
     )
 
 
-def get_predictions_with_fallback(route=None, stop=None):
-    """Use live feeds first and the static schedule as the final fallback."""
-    truetime_data = get_predictions_truetime(route, stop)
-    if _has_arrivals(truetime_data):
-        return truetime_data
+def _merge_live_and_scheduled(live_data, static_data, tolerance_minutes=7):
+    """Keep scheduled trips visible even once a live source has other arrivals.
 
-    logger.info("TrueTime had no arrivals; checking GTFS-RT")
-    gtfsrt_data = get_predictions_gtfsrt(route, stop)
-    if _has_arrivals(gtfsrt_data):
-        return gtfsrt_data
-
-    logger.info("No live arrival found; checking the static GTFS schedule")
-    static_data = get_predictions_static(route, stop)
-    if _has_arrivals(static_data):
+    A missing live prediction should never read as "canceled" - if the
+    static schedule expects a bus and no live arrival is close to it in
+    time, we keep the scheduled entry and mark it as such instead of
+    silently dropping it.
+    """
+    if not static_data:
+        return live_data
+    if not live_data:
         return static_data
 
-    return truetime_data or gtfsrt_data or static_data
+    merged = dict(live_data)
+    merged_predictions = {}
+    added_scheduled = False
+
+    for direction in ("to_west_view", "to_downtown"):
+        live_direction = dict(live_data.get("predictions", {}).get(direction, {}))
+        static_direction = static_data.get("predictions", {}).get(direction, {})
+        live_arrivals = list(live_direction.get("arrivals", []))
+        scheduled_arrivals = static_direction.get("arrivals", [])
+
+        claimed = set()
+        extra_scheduled = []
+        for scheduled in scheduled_arrivals:
+            match_index = next(
+                (
+                    index for index, live in enumerate(live_arrivals)
+                    if index not in claimed
+                    and abs(live["minutes"] - scheduled["minutes"]) <= tolerance_minutes
+                ),
+                None,
+            )
+            if match_index is not None:
+                claimed.add(match_index)
+                continue
+            extra_scheduled.append({
+                **scheduled,
+                "note": "Scheduled · live tracking unavailable",
+            })
+
+        if extra_scheduled:
+            added_scheduled = True
+
+        combined = sorted(live_arrivals + extra_scheduled, key=lambda item: item["minutes"])
+        live_direction["arrivals"] = combined[:6]
+        merged_predictions[direction] = live_direction
+
+    merged["predictions"] = merged_predictions
+    if added_scheduled:
+        sources = [s for s in (live_data.get("data_source"), static_data.get("data_source")) if s]
+        merged["data_source"] = "+".join(dict.fromkeys(sources))
+        merged["is_live"] = live_data.get("is_live", False)
+    merged["feed_valid_through"] = static_data.get("feed_valid_through")
+    return merged
+
+
+def _direction_service_status(route, stop_id, now):
+    """Explain why a direction has no arrivals right now.
+
+    Returns one of: "unavailable" (can't check the schedule at all),
+    "scheduled_only" (a later bus is expected later today), or
+    "service_ended" (nothing more is scheduled until a future day).
+    """
+    next_departure = STATIC_GTFS.next_departure(route, stop_id, now)
+    if next_departure is None:
+        return {
+            "state": "unavailable",
+            "message": "Live tracking unavailable and no schedule data could be checked.",
+            "next_departure": None,
+        }
+
+    scheduled_dt = next_departure["scheduled_datetime"]
+    time_label = scheduled_dt.strftime("%I:%M %p").lstrip("0")
+    if scheduled_dt.date() == now.date():
+        return {
+            "state": "scheduled_only",
+            "message": f"Live tracking unavailable. Next scheduled departure: {time_label}.",
+            "next_departure": scheduled_dt.isoformat(),
+        }
+
+    day_label = "tomorrow" if scheduled_dt.date() == now.date() + timedelta(days=1) else scheduled_dt.strftime("%A")
+    return {
+        "state": "service_ended",
+        "message": f"Service has ended for today. Next scheduled bus: {time_label} {day_label}.",
+        "next_departure": scheduled_dt.isoformat(),
+    }
+
+
+def get_predictions_with_fallback(route=None, stop=None):
+    """Use live feeds first, merging in scheduled trips a live feed missed."""
+    truetime_data = get_predictions_truetime(route, stop)
+    gtfsrt_data = None
+    if not _has_arrivals(truetime_data):
+        logger.info("TrueTime had no arrivals; checking GTFS-RT")
+        gtfsrt_data = get_predictions_gtfsrt(route, stop)
+
+    live_data = truetime_data if _has_arrivals(truetime_data) else (gtfsrt_data or truetime_data)
+    static_data = get_predictions_static(route, stop)
+
+    merged = _merge_live_and_scheduled(live_data, static_data)
+    if merged is not None:
+        return merged
+
+    return live_data or static_data
 
 
 @app.route("/")
@@ -850,18 +985,125 @@ def serve_service_worker():
     return send_file('service-worker.js', mimetype='application/javascript')
 
 
+def _feed_expiry_status():
+    """Summarize whether the bundled static schedule needs replacing soon."""
+    valid_through = STATIC_GTFS.valid_through
+    if not valid_through:
+        return {"valid_through": None, "expires_soon": False, "expired": False}
+
+    today = datetime.now(EASTERN_TZ).date()
+    days_left = (valid_through - today).days
+    return {
+        "valid_through": valid_through.isoformat(),
+        "expires_soon": 0 <= days_left <= GTFS_EXPIRY_WARNING_DAYS,
+        "expired": days_left < 0,
+    }
+
+
+def _maybe_refresh_static_gtfs():
+    """Opportunistically download a newer static feed, if one is configured.
+
+    We won't guess PRT's feed URL - set GTFS_STATIC_FEED_URL (see
+    https://www.rideprt.org/business-center/developer-resources/) to enable
+    this. The downloaded file is validated before it replaces the bundled
+    feed, so a bad download never breaks the running app.
+    """
+    global STATIC_GTFS
+
+    if not GTFS_STATIC_FEED_URL:
+        return
+
+    now = time.time()
+    if now - _gtfs_refresh_state["checked_at"] < GTFS_REFRESH_CHECK_INTERVAL:
+        return
+    _gtfs_refresh_state["checked_at"] = now
+
+    try:
+        response = requests.get(GTFS_STATIC_FEED_URL, timeout=30)
+        response.raise_for_status()
+
+        archive_path = STATIC_GTFS.archive_path
+        temp_path = archive_path.with_suffix(".tmp")
+        temp_path.write_bytes(response.content)
+
+        candidate = load_gtfs.__wrapped__(temp_path)
+        if not candidate.available:
+            logger.warning("Downloaded GTFS feed failed validation: %s", candidate.error)
+            temp_path.unlink(missing_ok=True)
+            return
+
+        today = datetime.now(EASTERN_TZ).date()
+        if candidate.valid_through and candidate.valid_through < today:
+            logger.warning("Downloaded GTFS feed is already expired; keeping the current one")
+            temp_path.unlink(missing_ok=True)
+            return
+
+        temp_path.replace(archive_path)
+        load_gtfs.cache_clear()
+        STATIC_GTFS = load_gtfs()
+        logger.info("Refreshed static GTFS feed, valid through %s", STATIC_GTFS.valid_through)
+    except (requests.RequestException, OSError) as error:
+        logger.warning("Static GTFS refresh check failed: %s", error)
+
+
 @app.route("/health")
 def health():
+    _maybe_refresh_static_gtfs()
+    expiry = _feed_expiry_status()
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "static_gtfs": {
             "available": STATIC_GTFS.available,
-            "valid_through": (
-                STATIC_GTFS.valid_through.isoformat() if STATIC_GTFS.valid_through else None
-            ),
+            **expiry,
         },
     })
+
+
+def _record_snapshot(route, stop_key, direction, arrivals, data_source):
+    """Throttled write of observed predictions for later on-time analysis."""
+    throttle_key = (route, stop_key)
+    now = time.time()
+    if now - _last_snapshot_at.get(throttle_key, 0) < SNAPSHOT_MIN_INTERVAL_SECONDS:
+        return
+    _last_snapshot_at[throttle_key] = now
+
+    recorded_at = datetime.now(EASTERN_TZ).isoformat()
+    try:
+        for arrival in arrivals:
+            history_store.record_snapshot(route, stop_key, direction, arrival, recorded_at, data_source)
+    except Exception as error:  # never let history logging break predictions
+        logger.warning("Could not record prediction snapshot: %s", error)
+
+
+@app.route("/observations", methods=["POST"])
+def record_observation():
+    """Log a rider-reported observation, e.g. tapping 'Bus arrived'.
+
+    These are kept separate from predictions - they're what actually
+    happened, not a forecast, and that distinction matters once this data
+    is used to measure on-time performance.
+    """
+    payload = request.get_json(silent=True) or {}
+    route = str(payload.get("route", "")).strip()
+    stop_key = str(payload.get("stop", "")).strip()
+    direction = payload.get("direction")
+    note = str(payload.get("note") or "Bus arrived").strip()
+
+    if not route or route not in VALID_ROUTES:
+        return jsonify({"error": "A valid 'route' is required."}), 400
+    if not stop_key or stop_key not in STOP_CONFIGS:
+        return jsonify({"error": "A valid 'stop' is required."}), 400
+
+    try:
+        history_store.record_observation(
+            route, stop_key, direction, note, datetime.now(EASTERN_TZ).isoformat()
+        )
+    except Exception as error:
+        logger.error("Could not record observation: %s", error)
+        return jsonify({"error": "Could not record observation"}), 500
+
+    return jsonify({"status": "recorded"}), 201
 
 
 def _build_predictions_payload(route, requested_stop):
@@ -933,6 +1175,23 @@ def _build_predictions_payload(route, requested_stop):
         (data.get("feed_valid_through") for data in active_data if data.get("feed_valid_through")),
         None,
     )
+    source_age_seconds = next(
+        (data.get("source_age_seconds") for data in active_data if data.get("source_age_seconds") is not None),
+        None,
+    )
+
+    # Explain empty directions with the actual next scheduled trip instead of
+    # a generic time-of-day guess, and never claim a direction has "no bus"
+    # if the stop simply doesn't serve it.
+    now = datetime.now(EASTERN_TZ)
+    for direction_key, predictions_dict, physical_stop_id in (
+        ("to_west_view", westview_predictions, stop_numbers["outbound"]),
+        ("to_downtown", downtown_predictions, stop_numbers["inbound"]),
+    ):
+        if direction_key in directions and not predictions_dict.get("arrivals"):
+            predictions_dict["service_status"] = _direction_service_status(route, physical_stop_id, now)
+        if predictions_dict.get("arrivals"):
+            _record_snapshot(route, stop, direction_key, predictions_dict["arrivals"], data_source)
 
     return {
         "stop_name": outbound_name,
@@ -944,7 +1203,9 @@ def _build_predictions_payload(route, requested_stop):
         "last_updated": now_label,
         "data_source": data_source,
         "is_live": is_live,
+        "source_age_seconds": source_age_seconds,
         "feed_valid_through": feed_valid_through,
+        "feed_expiry": _feed_expiry_status(),
         "expected_headway": headway,
         "schedule_period": period,
         "predictions": {

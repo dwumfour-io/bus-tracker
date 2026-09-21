@@ -33,3 +33,6 @@ docker-compose.override.yml
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local history database (prediction snapshots + rider observations)
+data/

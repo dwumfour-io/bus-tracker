@@ -21,6 +21,9 @@ from api import (
     get_predictions_with_fallback,
     _get_official_stop_names,
     _stop_metadata_cache,
+    _direction_service_status,
+    _parse_truetime_timestamp,
+    _feed_expiry_status,
 )
 
 
@@ -57,9 +60,12 @@ class TestTimeCalculations:
 class TestStatusFormatting:
     """Test delay status formatting"""
     
+    def test_unknown_delay(self):
+        """A missing delay reading should say so, not claim On Time"""
+        assert _format_status(None) == "Delay unknown"
+
     def test_on_time(self):
-        """No delay should show On Time"""
-        assert _format_status(None) == "On Time"
+        """Zero delay should show On Time"""
         assert _format_status(0) == "On Time"
     
     def test_delayed(self):
@@ -177,7 +183,7 @@ class TestTrueTimeResponseFormatting:
 
 
 class TestPredictionFallback:
-    """Test source selection when one PRT feed has no arrivals."""
+    """Test source selection and merging across the live/static PRT feeds."""
 
     @patch('api.get_predictions_static')
     @patch('api.get_predictions_gtfsrt')
@@ -201,11 +207,53 @@ class TestPredictionFallback:
                 "to_downtown": {"arrivals": []},
             },
         }
+        mock_static.return_value = None
 
         result = get_predictions_with_fallback("13", "1009")
 
         assert result["data_source"] == "gtfs-rt"
-        mock_static.assert_not_called()
+
+    @patch('api.get_predictions_static')
+    @patch('api.get_predictions_gtfsrt')
+    @patch('api.get_predictions_truetime')
+    def test_scheduled_trip_stays_visible_next_to_a_live_arrival(
+        self,
+        mock_truetime,
+        mock_gtfsrt,
+        mock_static,
+    ):
+        """A live source having *some* arrivals must not hide a scheduled trip."""
+        mock_truetime.return_value = {
+            "data_source": "truetime",
+            "is_live": True,
+            "predictions": {
+                "to_west_view": {"arrivals": [{"minutes": 6, "is_live": True}]},
+                "to_downtown": {"arrivals": []},
+            },
+        }
+        mock_static.return_value = {
+            "data_source": "gtfs-static",
+            "feed_valid_through": "2026-10-14",
+            "predictions": {
+                "to_west_view": {
+                    "arrivals": [
+                        {"minutes": 6, "trip_id": "a", "is_live": False, "prediction_type": "scheduled"},
+                        {"minutes": 40, "trip_id": "b", "is_live": False, "prediction_type": "scheduled"},
+                    ]
+                },
+                "to_downtown": {"arrivals": []},
+            },
+        }
+
+        result = get_predictions_with_fallback("13", "1009")
+
+        westview_arrivals = result["predictions"]["to_west_view"]["arrivals"]
+        assert len(westview_arrivals) == 2
+        assert westview_arrivals[0]["is_live"] is True
+        assert westview_arrivals[1]["minutes"] == 40
+        assert westview_arrivals[1]["note"] == "Scheduled · live tracking unavailable"
+        assert result["data_source"] == "truetime+gtfs-static"
+        mock_gtfsrt.assert_not_called()
 
 
 class TestAPIEndpoints:
@@ -317,6 +365,78 @@ class TestRouteStopCompatibility:
         assert '618' in compatibility['8']
         assert '733' in compatibility['8']
         assert '1016' not in compatibility['8']
+
+
+class TestFreshnessParsing:
+    """Test extracting how old a live prediction source is."""
+
+    def test_parses_seconds_variant(self):
+        result = _parse_truetime_timestamp("20260918 20:15:30")
+        assert result.strftime("%H:%M:%S") == "20:15:30"
+
+    def test_parses_minutes_only_variant(self):
+        result = _parse_truetime_timestamp("20260918 20:15")
+        assert result.strftime("%H:%M") == "20:15"
+
+    def test_missing_value_returns_none(self):
+        assert _parse_truetime_timestamp(None) is None
+        assert _parse_truetime_timestamp("") is None
+
+
+class TestDirectionServiceStatus:
+    """Test the messages shown when a direction has no live arrivals."""
+
+    def test_scheduled_only_when_a_later_bus_exists_today(self):
+        now = datetime(2026, 9, 18, 19, 51, tzinfo=timezone.utc).astimezone()
+        status = _direction_service_status("13", "1009", now)
+
+        assert status["state"] in ("scheduled_only", "service_ended", "unavailable")
+        assert "message" in status
+
+    def test_unavailable_when_no_schedule_exists_for_stop(self):
+        now = datetime(2026, 9, 18, 19, 51, tzinfo=timezone.utc).astimezone()
+        status = _direction_service_status("13", "not-a-real-stop-id", now)
+
+        assert status == {
+            "state": "unavailable",
+            "message": "Live tracking unavailable and no schedule data could be checked.",
+            "next_departure": None,
+        }
+
+
+class TestFeedExpiryStatus:
+    """Test the bundled GTFS feed expiry warning."""
+
+    def test_reports_valid_through_date(self):
+        status = _feed_expiry_status()
+        assert "valid_through" in status
+        assert "expires_soon" in status
+        assert "expired" in status
+
+
+class TestObservationsEndpoint:
+    """Test the rider-reported 'bus arrived' observation endpoint."""
+
+    def test_requires_a_valid_route(self, client):
+        response = client.post('/observations', json={"route": "99", "stop": "stop_1009"})
+        assert response.status_code == 400
+
+    def test_requires_a_valid_stop(self, client):
+        response = client.post('/observations', json={"route": "13", "stop": "not-a-stop"})
+        assert response.status_code == 400
+
+    def test_records_a_valid_observation(self, client, tmp_path, monkeypatch):
+        import history_store
+        monkeypatch.setattr(history_store, "_db_path", str(tmp_path / "history.db"))
+        history_store.init_db(str(tmp_path / "history.db"))
+
+        response = client.post(
+            '/observations',
+            json={"route": "13", "stop": "stop_1009", "note": "Bus arrived"},
+        )
+
+        assert response.status_code == 201
+        assert json.loads(response.data)["status"] == "recorded"
 
 
 if __name__ == '__main__':

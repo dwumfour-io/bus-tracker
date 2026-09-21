@@ -57,7 +57,7 @@ jobs:
 
       - name: Run flake8
         run: |
-          flake8 api.py gtfs_static.py scripts/build_gtfs_subset.py --max-line-length=120 --ignore=E501,W503
+          flake8 api.py gtfs_static.py history_store.py scripts/build_gtfs_subset.py --max-line-length=120 --ignore=E501,W503
 
   docker:
     runs-on: ubuntu-latest
