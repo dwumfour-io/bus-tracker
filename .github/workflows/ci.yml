@@ -32,6 +32,9 @@ jobs:
         run: |
           pytest tests/ -v --cov=. --cov-report=xml --cov-report=term-missing
 
+      - name: Test route selection and countdowns
+        run: node --test tests/test_*.js
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:

@@ -1,10 +1,9 @@
 // Pittsburgh Bus Tracker - Service Worker
 // Bump this version to force clients to refresh on new deployments
-const CACHE_VERSION = 14;
+const CACHE_VERSION = 16;
 const CACHE_NAME = `pgh-bus-tracker-v${CACHE_VERSION}`;
 const STATIC_ASSETS = [
   '/',
-  '/index.html',
   '/style.css',
   '/app.js',
   '/manifest.json'
@@ -44,6 +43,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
   // For API calls - always go to network (real-time data)
   if (url.pathname.startsWith('/predictions') || 
@@ -68,36 +68,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // For static assets - cache first, then network
+  // Use the current page/scripts after a deployment, with an offline fallback.
   event.respondWith(
-    caches.match(request)
-      .then((cachedResponse) => {
-        if (cachedResponse) {
-          // Return cache but also update in background
-          event.waitUntil(
-            fetch(request)
-              .then((networkResponse) => {
-                if (networkResponse.ok) {
-                  caches.open(CACHE_NAME)
-                    .then((cache) => cache.put(request, networkResponse));
-                }
-              })
-              .catch(() => {})
-          );
-          return cachedResponse;
-        }
-        
-        // Not in cache, fetch from network
-        return fetch(request)
-          .then((networkResponse) => {
-            if (networkResponse.ok) {
-              const responseClone = networkResponse.clone();
-              caches.open(CACHE_NAME)
-                .then((cache) => cache.put(request, responseClone));
-            }
-            return networkResponse;
-          });
-      })
+    fetch(request).then((response) => {
+      if (response.ok) {
+        const copy = response.clone();
+        event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)));
+      }
+      return response;
+    }).catch(() => caches.match(request).then((cached) => cached || Response.error()))
   );
 });
 

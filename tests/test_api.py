@@ -106,13 +106,17 @@ class TestTrueTimeResponseFormatting:
         assert result["predictions"]["to_west_view"]["arrivals"] == []
         assert result["predictions"]["to_downtown"]["arrivals"] == []
     
-    def test_valid_predictions(self):
+    @patch('api.datetime', wraps=datetime)
+    def test_valid_predictions(self, mock_datetime):
         """Valid predictions should be parsed correctly"""
+        from api import EASTERN_TZ
+        mock_datetime.now.return_value = datetime(2026, 1, 2, 10, 25, tzinfo=EASTERN_TZ)
         data = {
             "bustime-response": {
                 "prd": [
                     {
                         "prdtm": "20260102 10:30",
+                        "rt": "13",
                         "vid": "1234",
                         "dly": False,
                         "prdctdn": "5",
@@ -120,6 +124,7 @@ class TestTrueTimeResponseFormatting:
                     },
                     {
                         "prdtm": "20260102 10:45",
+                        "rt": "13",
                         "vid": "5678",
                         "dly": True,
                         "prdctdn": "20",
@@ -204,6 +209,7 @@ class TestPredictionFallback:
         }
         mock_gtfsrt.return_value = {
             "data_source": "gtfs-rt",
+            "is_live": True,
             "predictions": {
                 "to_west_view": {"arrivals": [{"minutes": 10}]},
                 "to_downtown": {"arrivals": []},

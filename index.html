@@ -78,6 +78,7 @@
         </div>
 
         <!-- Static schedule expiry warning -->
+        <div id="live-status-banner" class="feed-expiry-banner" hidden role="status"></div>
         <div id="feed-expiry-banner" class="feed-expiry-banner" style="display: none;" role="alert"></div>
 
         <!-- Service Alerts Banner -->
@@ -118,7 +119,7 @@
                             <span data-stop-name="to_west_view">Center Ave + Chalfonte Ave</span>
                             <span class="direction-stop-number" data-stop-number="to_west_view">Stop #1009</span>
                         </h2>
-                        <p class="destination">To West View Plaza, Fire Lane Plaza, Giant Eagle</p>
+                        <p class="destination" data-destination="to_west_view">To West View Plaza, Fire Lane Plaza, Giant Eagle</p>
                     </div>
                     <div id="westview-arrivals" class="arrivals-list">
                         <div class="loading">Loading arrivals...</div>
@@ -132,7 +133,7 @@
                             <span data-stop-name="to_downtown">Center Ave + Chalfonte Ave</span>
                             <span class="direction-stop-number" data-stop-number="to_downtown">Stop #1009</span>
                         </h2>
-                        <p class="destination">To Downtown</p>
+                        <p class="destination" data-destination="to_downtown">To Downtown</p>
                     </div>
                     <div id="downtown-arrivals" class="arrivals-list">
                         <div class="loading">Loading arrivals...</div>
@@ -148,7 +149,7 @@
                         <span data-stop-name="to_west_view">Center Ave + Chalfonte Ave</span>
                         <span class="direction-stop-number" data-stop-number="to_west_view">Stop #1009</span>
                     </h2>
-                    <p class="destination">To West View Plaza, Fire Lane Plaza, Giant Eagle</p>
+                    <p class="destination" data-destination="to_west_view">To West View Plaza, Fire Lane Plaza, Giant Eagle</p>
                 </div>
                 <div id="westview-arrivals-single" class="arrivals-list">
                     <div class="loading">Loading arrivals...</div>
@@ -163,7 +164,7 @@
                         <span data-stop-name="to_downtown">Center Ave + Chalfonte Ave</span>
                         <span class="direction-stop-number" data-stop-number="to_downtown">Stop #1009</span>
                     </h2>
-                    <p class="destination">To Downtown</p>
+                    <p class="destination" data-destination="to_downtown">To Downtown</p>
                 </div>
                 <div id="downtown-arrivals-single" class="arrivals-list">
                     <div class="loading">Loading arrivals...</div>
@@ -208,6 +209,6 @@
         </div>
     </footer>
 
-    <script src="app.js?v=1.2.1"></script>
+    <script src="app.js?v=1.3.0"></script>
 </body>
 </html>

@@ -52,6 +52,8 @@ def add_security_headers(response):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if request.path.startswith('/predictions'):
+        response.headers['Cache-Control'] = 'no-store'
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
@@ -72,6 +74,8 @@ API_PORT = int(os.environ.get("API_PORT", 5001))
 STOP_METADATA_CACHE_TTL = 3600
 _stop_metadata_cache = {"expires_at": 0, "names": {}}
 GTFSRT_CACHE_TTL = 15
+LIVE_MAX_AGE_SECONDS = 90
+UPSTREAM_TIMEOUT = (3, 5)
 _gtfsrt_feed_cache = {"expires_at": 0, "feed": None}
 STATIC_GTFS = load_gtfs()
 
@@ -406,8 +410,8 @@ def _format_status(delay_seconds: int | None) -> str:
 
 
 def _parse_truetime_timestamp(value):
-    """Parse TrueTime's 'tmstmp' (prediction-generated-at) field, if present."""
-    if not value:
+    """Parse a local TrueTime timestamp at minute or second resolution."""
+    if not isinstance(value, str) or not value:
         return None
     for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d %H:%M"):
         try:
@@ -432,12 +436,13 @@ def get_predictions_truetime(route=None, stop=None):
         "key": PAAC_API_KEY,
         "stpid": selected_stop,
         "format": "json",
+        "tmres": "s",
         "rtpidatafeed": "Port Authority Bus",
         "top": "10"  # Get more results to filter from
     }
 
     try:
-        response = requests.get(f"{TRUETIME_BASE_URL}/getpredictions", params=params, timeout=10)
+        response = requests.get(f"{TRUETIME_BASE_URL}/getpredictions", params=params, timeout=UPSTREAM_TIMEOUT)
         if response.status_code == 200:
             # Fix invalid JSON escapes from TrueTime API
             raw_text = response.text.replace('\\-', '-')
@@ -448,7 +453,7 @@ def get_predictions_truetime(route=None, stop=None):
         else:
             logger.warning(f"TrueTime API returned status {response.status_code}")
     except Exception as e:
-        logger.error(f"Error fetching TrueTime predictions: {e}")
+        logger.error("Error fetching TrueTime predictions (%s)", type(e).__name__)
 
     return None
 
@@ -487,11 +492,14 @@ def _format_truetime_response(data, route=None, stop=None):
         to_west_view = []
         to_downtown = []
         latest_source_dt = None
+        now = datetime.now(EASTERN_TZ)
 
         for pred in pred_list:
             # Filter by route - only include predictions for the requested route
-            pred_route = pred.get("rt", "")
-            if selected_route and pred_route and pred_route != selected_route:
+            pred_route = str(pred.get("rt", "")).strip()
+            if pred_route != str(selected_route):
+                continue
+            if pred.get("stpid") and str(pred["stpid"]) not in stop_numbers.values():
                 continue
 
             arrival_time_raw = pred.get("prdtm", "N/A")  # Format: "20260102 23:38"
@@ -503,23 +511,33 @@ def _format_truetime_response(data, route=None, stop=None):
             )
 
             generated_at = _parse_truetime_timestamp(pred.get("tmstmp"))
+            arr_dt = _parse_truetime_timestamp(arrival_time_raw)
+            is_due = str(pred.get("prdctdn", "")).upper() == "DUE"
+            if arr_dt is None:
+                # A countdown is meaningful only relative to when it was generated.
+                if not generated_at:
+                    continue
+                try:
+                    countdown = 0 if is_due else int(pred["prdctdn"])
+                    arr_dt = generated_at + timedelta(minutes=max(0, countdown))
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+            seconds_until = (arr_dt - now).total_seconds()
+            if seconds_until < -60:
+                continue
+            minutes = max(0, int(seconds_until // 60))
+            arrival_time_display = arr_dt.strftime("%I:%M %p")
             if generated_at and (latest_source_dt is None or generated_at > latest_source_dt):
                 latest_source_dt = generated_at
-
-            # Use the countdown from API (already in minutes)
-            minutes = int(pred.get("prdctdn", 0))
-
-            # Format time for display (12-hour format)
-            try:
-                arr_dt = datetime.strptime(arrival_time_raw, "%Y%m%d %H:%M")
-                arrival_time_display = arr_dt.strftime("%I:%M %p")
-            except Exception as e:
-                logger.warning(f"Error parsing time {arrival_time_raw}: {e}")
-                arrival_time_display = arrival_time_raw
 
             record = {
                 "minutes": minutes,
                 "time": arrival_time_display,
+                "arrival_timestamp": arr_dt.timestamp(),
+                "source_timestamp": generated_at.timestamp() if generated_at else None,
+                "route": pred_route,
+                "is_due": is_due,
+                "event_type": "departure" if pred.get("typ") == "D" else "arrival",
                 "vehicle_id": vehicle_id,
                 "status": status,
                 "is_live": prediction_type == "live",
@@ -543,7 +561,7 @@ def _format_truetime_response(data, route=None, stop=None):
 
         now_label = datetime.now(EASTERN_TZ).strftime("%I:%M:%S %p")
         source_age_seconds = (
-            round((datetime.now(EASTERN_TZ) - latest_source_dt).total_seconds())
+            max(0, round((now - latest_source_dt).total_seconds()))
             if latest_source_dt else None
         )
 
@@ -588,7 +606,7 @@ def _get_gtfsrt_feed():
     if _gtfsrt_feed_cache["feed"] is not None and now < _gtfsrt_feed_cache["expires_at"]:
         return _gtfsrt_feed_cache["feed"]
 
-    response = requests.get(GTFSRT_TRIPS_URL, timeout=10)
+    response = requests.get(GTFSRT_TRIPS_URL, timeout=UPSTREAM_TIMEOUT)
     response.raise_for_status()
     feed = gtfs_realtime_pb2.FeedMessage()
     feed.ParseFromString(response.content)
@@ -605,24 +623,26 @@ def _physical_stop_directions(stop):
     stop_key = _resolve_stop_key(stop) or DEFAULT_STOP_KEY
     numbers = _get_stop_numbers(stop_key)
     mapping = {}
-    if not selected_stop or selected_stop == numbers["outbound"]:
+    served = _get_stop_directions(stop_key)
+    if "to_west_view" in served and (not selected_stop or selected_stop == numbers["outbound"]):
         mapping.setdefault(numbers["outbound"], []).append("to_west_view")
-    if not selected_stop or selected_stop == numbers["inbound"]:
+    if "to_downtown" in served and (not selected_stop or selected_stop == numbers["inbound"]):
         mapping.setdefault(numbers["inbound"], []).append("to_downtown")
     return stop_key, mapping
 
 
-def _trip_direction_key(trip_id):
+def _trip_direction_key(trip_id, direction_id=None):
     """Translate the static GTFS direction ID into an app direction key."""
-    return "to_downtown" if STATIC_GTFS.trip_direction(trip_id) == "1" else "to_west_view"
+    direction = str(direction_id) if direction_id is not None else STATIC_GTFS.trip_direction(trip_id)
+    return {"0": "to_west_view", "1": "to_downtown"}.get(direction)
 
 
-def _arrival_direction(stop_id, trip_id, stop_directions):
+def _arrival_direction(stop_id, trip_id, stop_directions, direction_id=None):
     choices = stop_directions.get(stop_id, [])
     if len(choices) == 1:
         return choices[0]
-    trip_direction = _trip_direction_key(trip_id)
-    return trip_direction if trip_direction in choices else (choices[0] if choices else None)
+    trip_direction = _trip_direction_key(trip_id, direction_id)
+    return trip_direction if trip_direction in choices else None
 
 
 def get_predictions_gtfsrt(route=None, stop=None):
@@ -662,6 +682,8 @@ def get_predictions_gtfsrt(route=None, stop=None):
                 continue
 
             trip = entity.trip_update.trip
+            if entity.is_deleted or trip.schedule_relationship == gtfs_realtime_pb2.TripDescriptor.CANCELED:
+                continue
 
             # Filter by route
             if trip.route_id != route:
@@ -674,8 +696,16 @@ def get_predictions_gtfsrt(route=None, stop=None):
                 if stop_id not in requested_stop_ids:
                     continue
 
-                # Get arrival time
-                arrival_time = stu.arrival.time if stu.HasField('arrival') else None
+                if stu.schedule_relationship in (
+                    gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SKIPPED,
+                    gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.NO_DATA,
+                ):
+                    continue
+
+                # Departure-only updates are valid, especially at the start of a trip.
+                event_type = "arrival" if stu.HasField('arrival') and stu.arrival.HasField('time') else "departure"
+                event = getattr(stu, event_type)
+                arrival_time = event.time if stu.HasField(event_type) and event.HasField('time') else None
                 if not arrival_time:
                     continue
 
@@ -684,7 +714,7 @@ def get_predictions_gtfsrt(route=None, stop=None):
                     continue
 
                 # Calculate minutes until arrival
-                minutes = max(0, round((arrival_time - now_epoch) / 60))
+                minutes = max(0, int((arrival_time - now_epoch) // 60))
 
                 # Format arrival time
                 arrival_dt = datetime.fromtimestamp(arrival_time, tz=EASTERN_TZ)
@@ -703,6 +733,10 @@ def get_predictions_gtfsrt(route=None, stop=None):
                     "minutes": minutes,
                     "arrival_time": arrival_str,
                     "time": arrival_str,
+                    "arrival_timestamp": arrival_time,
+                    "source_timestamp": entity.trip_update.timestamp or feed.header.timestamp or None,
+                    "route": route,
+                    "event_type": event_type,
                     "scheduled_time": (
                         scheduled_dt.strftime("%I:%M %p").lstrip("0")
                         if scheduled_dt else None
@@ -720,7 +754,10 @@ def get_predictions_gtfsrt(route=None, stop=None):
                     "prediction_type": "live",
                 }
 
-                direction_key = _arrival_direction(stop_id, trip.trip_id, stop_directions)
+                direction_key = _arrival_direction(
+                    stop_id, trip.trip_id, stop_directions,
+                    trip.direction_id if trip.HasField('direction_id') else None,
+                )
                 if direction_key == "to_west_view":
                     outbound_arrivals.append(arrival_data)
                 elif direction_key == "to_downtown":
@@ -805,6 +842,8 @@ def get_predictions_static(route=None, stop=None):
                 "minutes": scheduled["minutes"],
                 "time": scheduled_dt.strftime("%I:%M %p").lstrip("0"),
                 "scheduled_time": scheduled_dt.strftime("%I:%M %p").lstrip("0"),
+                "arrival_timestamp": scheduled_dt.timestamp(),
+                "route": selected_route,
                 "vehicle_id": None,
                 "trip_id": scheduled["trip_id"],
                 "status": "Scheduled",
@@ -889,7 +928,11 @@ def _merge_live_and_scheduled(live_data, static_data, tolerance_minutes=7):
                 (
                     index for index, live in enumerate(live_arrivals)
                     if index not in claimed
-                    and abs(live["minutes"] - scheduled["minutes"]) <= tolerance_minutes
+                    and (
+                        live["trip_id"] == scheduled["trip_id"]
+                        if live.get("trip_id") and scheduled.get("trip_id")
+                        else abs(live["minutes"] - scheduled["minutes"]) <= tolerance_minutes
+                    )
                 ),
                 None,
             )
@@ -949,22 +992,96 @@ def _direction_service_status(route, stop_id, now):
     }
 
 
+def _fresh_live_data(data):
+    """Keep only current live predictions, never timetable or stale records."""
+    if not data:
+        return None
+    now_epoch = datetime.now(timezone.utc).timestamp()
+    predictions = {}
+    for direction, values in data.get("predictions", {}).items():
+        arrivals = []
+        for arrival in values.get("arrivals", []):
+            if not arrival.get("is_live", data.get("is_live", False)) or arrival.get("prediction_type") == "scheduled":
+                continue
+            source_time = arrival.get("source_timestamp")
+            age = now_epoch - source_time if source_time is not None else data.get("source_age_seconds")
+            if age is not None and age > LIVE_MAX_AGE_SECONDS:
+                continue
+            arrivals.append(arrival)
+        predictions[direction] = {**values, "arrivals": arrivals}
+    result = {**data, "predictions": predictions}
+    result["is_live"] = _has_arrivals(result)
+    return result
+
+
+def _live_source_state(data, fresh_data, configured=True):
+    if not configured:
+        return "not_configured"
+    if data is None:
+        return "unavailable"
+    if _has_arrivals(fresh_data):
+        return "live"
+    if any(a.get("is_live", data.get("is_live", False)) for d in data.get("predictions", {}).values() for a in d.get("arrivals", [])):
+        return "stale"
+    return "schedule_only" if _has_arrivals(data) else "no_predictions"
+
+
 def get_predictions_with_fallback(route=None, stop=None):
-    """Use live feeds first, merging in scheduled trips a live feed missed."""
+    """Select fresh live data per direction before adding scheduled fallbacks."""
     truetime_data = get_predictions_truetime(route, stop)
+    fresh_truetime = _fresh_live_data(truetime_data)
     gtfsrt_data = None
-    if not _has_arrivals(truetime_data):
-        logger.info("TrueTime had no arrivals; checking GTFS-RT")
+    needed_directions = _get_stop_directions(stop or DEFAULT_STOP_KEY)
+    check_gtfsrt = any(
+        not (fresh_truetime or {}).get("predictions", {}).get(direction, {}).get("arrivals")
+        for direction in needed_directions
+    )
+    if check_gtfsrt:
+        logger.info("TrueTime has a gap in live coverage; checking GTFS-RT")
         gtfsrt_data = get_predictions_gtfsrt(route, stop)
-
-    live_data = truetime_data if _has_arrivals(truetime_data) else (gtfsrt_data or truetime_data)
+    fresh_gtfsrt = _fresh_live_data(gtfsrt_data)
+    live_data = dict(fresh_truetime or fresh_gtfsrt or {})
+    live_data["predictions"] = {}
+    sources = []
+    for direction in ("to_west_view", "to_downtown"):
+        chosen = next((data for data in (fresh_truetime, fresh_gtfsrt)
+                       if data and data.get("predictions", {}).get(direction, {}).get("arrivals")), None)
+        live_data["predictions"][direction] = dict(
+            chosen["predictions"][direction] if chosen else {
+                "destination": DESTINATION_WEST_VIEW if direction == "to_west_view" else DESTINATION_DOWNTOWN,
+                "direction": "OUTBOUND" if direction == "to_west_view" else "INBOUND",
+                "arrivals": [],
+            }
+        )
+        if chosen:
+            sources.append(chosen.get("data_source", ""))
+    live_data["data_source"] = "+".join(dict.fromkeys(sources))
+    live_data["is_live"] = _has_arrivals(live_data)
+    timestamps = [a["source_timestamp"] for d in live_data["predictions"].values()
+                  for a in d["arrivals"] if a.get("source_timestamp") is not None]
+    live_data["source_age_seconds"] = (
+        max(0, round(datetime.now(timezone.utc).timestamp() - min(timestamps))) if timestamps else None
+    )
     static_data = get_predictions_static(route, stop)
-
-    merged = _merge_live_and_scheduled(live_data, static_data)
+    if not live_data["is_live"]:
+        live_data = None
+    truetime_schedule = None
+    if truetime_data:
+        truetime_schedule = {**truetime_data, "is_live": False, "source_age_seconds": None, "predictions": {
+            direction: {**values, "arrivals": [a for a in values.get("arrivals", [])
+                                               if a.get("prediction_type") == "scheduled" or a.get("is_live") is False]}
+            for direction, values in truetime_data.get("predictions", {}).items()
+        }}
+    merged = _merge_live_and_scheduled(live_data, truetime_schedule if _has_arrivals(truetime_schedule) else None)
+    merged = _merge_live_and_scheduled(merged, static_data)
+    if merged is None:
+        merged = _empty_predictions_response(_get_stop_name(stop), route or BUS_ROUTE, stop)
     if merged is not None:
-        return merged
-
-    return live_data or static_data
+        merged["live_sources"] = {
+            "truetime": _live_source_state(truetime_data, fresh_truetime, bool(PAAC_API_KEY)),
+            "gtfs-rt": _live_source_state(gtfsrt_data, fresh_gtfsrt) if check_gtfsrt else "not_needed",
+        }
+    return merged
 
 
 @app.route("/")
@@ -1064,6 +1181,8 @@ def health():
     expiry = _feed_expiry_status()
     return jsonify({
         "status": "healthy",
+        "version": "1.3.0",
+        "live_tracking": {"truetime_configured": bool(PAAC_API_KEY), "gtfs_rt_enabled": True},
         "timestamp": datetime.now().isoformat(),
         "static_gtfs": {
             "available": STATIC_GTFS.available,
@@ -1214,8 +1333,10 @@ def _build_predictions_payload(route, requested_stop):
         "route": route,
         "last_updated": now_label,
         "data_source": data_source,
+        "server_time": datetime.now(timezone.utc).timestamp(),
         "is_live": is_live,
         "source_age_seconds": source_age_seconds,
+        "live_sources": next((data["live_sources"] for data in active_data if "live_sources" in data), {}),
         "feed_valid_through": feed_valid_through,
         "feed_expiry": _feed_expiry_status(),
         "expected_headway": headway,
@@ -1323,6 +1444,7 @@ def get_multi_route_predictions():
             "stops": _get_stop_entries("westview"),
             "routes": ["8", "13"],
             "last_updated": now_label,
+            "server_time": datetime.now(timezone.utc).timestamp(),
             "data_source": "+".join(data_sources) if data_sources else "unavailable",
             "is_live": any(data.get("is_live", False) for data in route_data),
             "expected_headway": combined_headway,

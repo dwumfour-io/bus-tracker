@@ -234,6 +234,23 @@ bus-tracker/
 Get the current static feed URL from [PRT's developer resources page](https://www.rideprt.org/business-center/developer-resources/) -
 we don't hardcode it since PRT can change it without notice.
 
+## Live Tracking Troubleshooting
+
+- `/health` reports the deployed `version` and whether a TrueTime API key is
+  configured, without returning the key. Configuration does not guarantee that
+  the key is valid. GTFS-Realtime works without a TrueTime key.
+- `/predictions?route=13&stop=1009` includes `live_sources`. Each source can report
+  `live`, `no_predictions`, `schedule_only`, `stale`, `unavailable`,
+  `not_configured`, or `not_needed`.
+- Scheduled-only or stale TrueTime results no longer block GTFS-Realtime.
+  The app checks missing directions separately and excludes live predictions
+  older than 90 seconds before adding clearly labeled scheduled times.
+- Countdown clocks use `arrival_timestamp` and `server_time`. The display keeps
+  counting between 30-second network refreshes; scheduled times are not live ETAs.
+- At West View Plaza, incoming buses and downtown departures are displayed
+  separately. An incoming bus is not automatically a departure prediction.
+- After deploying, reopen the tracker to load the updated service worker.
+
 ## Updating the Static GTFS Feed
 
 Download and extract PRT's current static feed, then rebuild the small archive

@@ -3,10 +3,15 @@ const API_URL = window.location.protocol === 'file:'
     ? 'http://localhost:5001'
     : window.location.origin; // Use localhost when opened as file, relative URL for production
 const REFRESH_INTERVAL = 30000; // 30 seconds
+const MAX_PREDICTION_AGE_SECONDS = 90;
 const DEFAULT_STOP_STORAGE_KEY = 'pixburgh-bus-tracker-default-stop';
 
 let autoRefreshInterval = null;
 let currentData = null;
+let currentDataReceivedAt = null;
+let predictionController = null;
+let predictionRequestId = 0;
+let displayedSelection = null;
 let currentRoute = '13';
 let currentStop = 'stop_1009';
 let activeTab = 'both';
@@ -155,6 +160,9 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchPredictions();
     fetchServiceAlerts();
     startAutoRefresh();
+    setInterval(() => {
+        if (currentData && !document.hidden) renderArrivals(currentData);
+    }, 1000);
 });
 
 // Check if current route serves the current stop, auto-switch if not
@@ -240,6 +248,7 @@ function initializeStopSelector() {
         updateDirectionStopNumbers();
         updateDirectionStopNamesFromSelection();
         fetchPredictions();
+        fetchServiceAlerts();
     });
 }
 
@@ -350,25 +359,37 @@ function stopAutoRefresh() {
 
 // Fetch predictions from API
 async function fetchPredictions() {
+    const requestId = ++predictionRequestId;
+    if (predictionController) predictionController.abort();
+    const route = currentRoute;
+    const stop = currentStop;
+    const selection = `${route}:${stop}`;
+    if (displayedSelection !== selection) {
+        currentData = null;
+        displayedSelection = selection;
+        document.querySelectorAll('.arrivals-list').forEach((element) => {
+            element.innerHTML = '<div class="loading">Loading arrivals...</div>';
+        });
+        updateFreshnessDisplay(null);
+        document.getElementById('data-source').textContent = '--';
+        document.getElementById('last-updated').textContent = '--';
+        updateLiveStatus(null);
+    }
     // Validate route/stop compatibility before making request
-    if (!isValidRouteStopCombo(currentRoute, currentStop)) {
+    if (!isValidRouteStopCombo(route, stop)) {
         showInvalidComboError();
         return;
     }
 
     updateStatus('Fetching...', 'connecting');
+    const controller = new AbortController();
+    predictionController = controller;
+    // Allow the backend to try both live sources before declaring a timeout.
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-        // Use multi-route endpoint at West View to show both Route 8 and 13
-        const endpoint = currentStop === 'westview'
-            ? `${API_URL}/predictions/multi?stop=westview`
-            : `${API_URL}/predictions?route=${currentRoute}&stop=${currentStop}`;
-
-        const response = await fetch(endpoint, { signal: controller.signal });
-        clearTimeout(timeoutId);
+        const endpoint = `${API_URL}/predictions?route=${encodeURIComponent(route)}&stop=${encodeURIComponent(stop)}`;
+        const response = await fetch(endpoint, { signal: controller.signal, cache: 'no-store' });
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -376,13 +397,23 @@ async function fetchPredictions() {
         }
 
         const data = await response.json();
+        if (requestId !== predictionRequestId || route !== currentRoute || stop !== currentStop) return;
 
         // Check for API-level errors
         if (data.error) {
             throw new ApiError(0, data.error);
         }
+        if (String(data.route) !== route) {
+            throw new ApiError(0, 'The arrival response does not match the selected route. Please refresh.');
+        }
+        Object.values(data.predictions).forEach((direction) => {
+            direction.arrivals = direction.arrivals.filter((arrival) =>
+                arrival.route == null || String(arrival.route) === route
+            ).map((arrival) => ({ ...arrival, route }));
+        });
 
         currentData = data;
+        currentDataReceivedAt = performance.now();
 
         updateStatus(data.is_live ? 'Live' : 'Schedule only', data.is_live ? 'live' : 'scheduled');
         updateLastUpdated(data.last_updated);
@@ -392,8 +423,15 @@ async function fetchPredictions() {
         renderArrivals(data);
 
     } catch (error) {
+        if (requestId !== predictionRequestId || route !== currentRoute || stop !== currentStop) return;
+        currentData = null;
+        updateFreshnessDisplay(null);
+        updateLiveStatus(null);
         console.error('Error fetching predictions:', error);
         handleFetchError(error);
+    } finally {
+        clearTimeout(timeoutId);
+        if (predictionController === controller) predictionController = null;
     }
 }
 
@@ -405,16 +443,7 @@ function updateStatus(text, statusClass) {
 }
 
 function updateLastUpdated(time) {
-    const now = new Date();
-    const estTime = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York',
-        hour: 'numeric',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true
-    }).format(now);
-
-    document.getElementById('last-updated').textContent = estTime + ' EST';
+    document.getElementById('last-updated').textContent = time ? `${time} ET` : '--';
 }
 
 function updateDataSource(source, isLive) {
@@ -447,17 +476,59 @@ function renderArrivals(data) {
     updateDirectionStopNumbers(data.predictions);
     updateFreshnessDisplay(data.source_age_seconds);
     updateFeedExpiryBanner(data.feed_expiry);
+    updateLiveStatus(data);
 
     // Check if at terminus (West View Plaza)
     const isAtWestView = currentStop === 'westview';
+    document.querySelectorAll('[data-destination="to_west_view"]').forEach((element) => {
+        element.textContent = isAtWestView ? 'Arrivals at West View Plaza' : 'To West View Plaza, Fire Lane Plaza, Giant Eagle';
+    });
+    document.querySelectorAll('[data-destination="to_downtown"]').forEach((element) => {
+        element.textContent = isAtWestView ? 'Departures to Downtown' : 'To Downtown';
+    });
 
     // Render for "Both Directions" tab
-    renderDirectionList('westview-arrivals', westviewData, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('westview-arrivals', westviewData, directions.includes('to_west_view'), 'to_west_view', null, expectedHeadway);
     renderDirectionList('downtown-arrivals', downtownData, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
 
     // Render for individual tabs
-    renderDirectionList('westview-arrivals-single', westviewData, directions.includes('to_west_view'), 'to_west_view', isAtWestView ? 'westview' : null, expectedHeadway);
+    renderDirectionList('westview-arrivals-single', westviewData, directions.includes('to_west_view'), 'to_west_view', null, expectedHeadway);
     renderDirectionList('downtown-arrivals-single', downtownData, directions.includes('to_downtown'), 'to_downtown', null, expectedHeadway);
+}
+
+function updateLiveStatus(data) {
+    const banner = document.getElementById('live-status-banner');
+    if (!banner) return;
+    if (!data) {
+        banner.hidden = true;
+        return;
+    }
+    const directions = data.directions || stopMetadata[currentStop]?.directions || [];
+    const visibleDirections = activeTab === 'westview' ? ['to_west_view']
+        : activeTab === 'downtown' ? ['to_downtown'] : directions;
+    const arrivals = visibleDirections.filter((direction) => directions.includes(direction))
+        .flatMap((direction) => data.predictions[direction]?.arrivals || []);
+    const live = arrivals.filter((arrival) => arrival.is_live === true && arrival.prediction_type !== 'scheduled');
+    const fresh = live.some((arrival) => {
+        const timing = arrivalTiming(arrival);
+        return !timing.stale && !timing.passed;
+    });
+    if (fresh) {
+        updateStatus('Live', 'live');
+        banner.hidden = true;
+        return;
+    }
+    const scheduled = arrivals.some((arrival) => arrival.is_live === false || arrival.prediction_type === 'scheduled');
+    updateStatus(live.length ? 'Live data stale' : (scheduled ? 'Schedule only' : 'No live prediction'), 'scheduled');
+    const sources = data.live_sources || {};
+    let reason = 'PRT has no current live prediction for this stop and direction.';
+    if (sources['gtfs-rt'] === 'unavailable') {
+        reason = 'The live feed could not be reached.';
+    } else if (live.length || Object.values(sources).includes('stale')) {
+        reason = 'The last live prediction is too old to rely on.';
+    }
+    banner.textContent = `Live tracking unavailable. ${reason}${scheduled ? ' Times shown are scheduled, not tracked bus arrivals.' : ''}`;
+    banner.hidden = false;
 }
 
 function updateFreshnessDisplay(sourceAgeSeconds) {
@@ -467,9 +538,10 @@ function updateFreshnessDisplay(sourceAgeSeconds) {
         return;
     }
 
-    const label = sourceAgeSeconds < 5
+    const age = Math.max(0, Math.floor(sourceAgeSeconds + secondsSinceResponse()));
+    const label = age < 5
         ? 'PRT updated just now'
-        : `PRT updated ${sourceAgeSeconds} second${sourceAgeSeconds === 1 ? '' : 's'} ago`;
+        : `PRT updated ${age} seconds ago${age > MAX_PREDICTION_AGE_SECONDS ? ' (stale)' : ''}`;
     elements.forEach((element) => { element.textContent = label; });
 }
 
@@ -610,16 +682,38 @@ function renderArrivalList(containerId, arrivals, terminus = null, expectedHeadw
     container.innerHTML = arrivals.map(arrival => createArrivalCard(arrival)).join('');
 }
 
+function secondsSinceResponse() {
+    return currentDataReceivedAt === null ? 0 : Math.max(0, (performance.now() - currentDataReceivedAt) / 1000);
+}
+
+function arrivalTiming(arrival) {
+    const elapsed = secondsSinceResponse();
+    // Use the server clock so an incorrectly set phone clock cannot change the ETA.
+    const now = Number.isFinite(currentData?.server_time) ? currentData.server_time + elapsed : Date.now() / 1000;
+    const seconds = Number.isFinite(arrival.arrival_timestamp)
+        ? arrival.arrival_timestamp - now
+        : arrival.minutes * 60 - elapsed;
+    const scheduled = arrival.prediction_type === 'scheduled' || arrival.is_live === false;
+    const sourceAge = Number.isFinite(arrival.source_timestamp) ? now - arrival.source_timestamp : 0;
+    const stale = !scheduled && (sourceAge > MAX_PREDICTION_AGE_SECONDS || elapsed > MAX_PREDICTION_AGE_SECONDS);
+    const passed = seconds < (scheduled ? 0 : -60);
+    const approaching = !scheduled && !stale && !passed && (arrival.is_due || seconds <= 120);
+    const due = approaching && (arrival.is_due || seconds < 60);
+    return {
+        stale, passed, approaching,
+        display: stale || passed ? '--' : (due ? 'Due' : Math.max(0, scheduled ? Math.ceil(seconds / 60) : Math.floor(seconds / 60))),
+        label: stale ? 'Stale' : (passed ? 'Passed' : (due ? 'Estimated' : (scheduled ? 'min sched.' : 'min est.'))),
+        status: stale ? 'Update needed' : (passed ? 'Time passed' : (approaching ? 'Due soon' : arrival.status)),
+    };
+}
+
 function createArrivalCard(arrival) {
-    const statusClass = getStatusClass(arrival.status);
+    const timing = arrivalTiming(arrival);
+    const statusClass = timing.stale || timing.passed ? 'schedule' : getStatusClass(arrival.status);
     const isScheduled = arrival.prediction_type === 'scheduled' || arrival.is_live === false;
     const cardClass = isScheduled ? 'schedule-card' : (statusClass === 'on-time' ? '' : statusClass);
 
-    // Show "Arriving Now" for buses less than 1 minute away
-    const isApproaching = arrival.minutes < 1;
-    const minutesDisplay = isApproaching ? 'Now' : arrival.minutes;
-    const minutesLabel = isApproaching ? 'Arriving' : 'min';
-    const approachingClass = isApproaching ? 'approaching' : '';
+    const approachingClass = timing.approaching ? 'approaching' : '';
 
     // Handle both field names: 'time' and 'arrival_time'
     const predictedTime = arrival.time || arrival.arrival_time || 'N/A';
@@ -628,24 +722,24 @@ function createArrivalCard(arrival) {
         ? `${scheduledTime || predictedTime} scheduled · live tracking unavailable`
         : (isScheduled
             ? `Scheduled: ${scheduledTime || predictedTime}`
-            : `Predicted: ${predictedTime}${scheduledTime ? ` • Scheduled: ${scheduledTime}` : ''}`);
+            : `Predicted ${arrival.event_type === 'departure' ? 'departure' : 'arrival'}: ${predictedTime}${scheduledTime ? ` • Scheduled: ${scheduledTime}` : ''}`);
 
     // Show route number if available (for multi-route at West View)
     const routeLabel = arrival.route ? `Route ${arrival.route} • ` : '';
-    const tripLabel = arrival.vehicle_id ? `Bus #${arrival.vehicle_id}` : 'Scheduled trip';
+    const tripLabel = arrival.vehicle_id ? `Bus #${arrival.vehicle_id}` : (isScheduled ? 'Scheduled trip' : 'Live estimate');
 
     return `
         <div class="arrival-card ${cardClass} ${approachingClass}">
             <div class="minutes-display ${approachingClass}">
-                <div class="minutes-number">${minutesDisplay}</div>
-                <div class="minutes-label">${minutesLabel}</div>
+                <div class="minutes-number">${timing.display}</div>
+                <div class="minutes-label">${timing.label}</div>
             </div>
             <div class="arrival-info">
                 <h3>${routeLabel}${tripLabel}</h3>
                 <div class="arrival-time">${timeLabel}</div>
             </div>
             <div class="status-badge ${statusClass}">
-                ${isApproaching ? 'Arriving Now' : arrival.status}
+                ${timing.status}
             </div>
         </div>
     `;
@@ -729,11 +823,14 @@ document.addEventListener('visibilitychange', () => {
 
 // Service Alerts
 async function fetchServiceAlerts() {
+    const route = currentRoute;
+    renderAlerts([]);
     try {
-        const response = await fetch(`${API_URL}/alerts?route=${currentRoute}`);
+        const response = await fetch(`${API_URL}/alerts?route=${route}`);
         if (!response.ok) return;
 
         const data = await response.json();
+        if (route !== currentRoute) return;
         renderAlerts(data.alerts || []);
     } catch (error) {
         // Silently fail - alerts are non-critical
