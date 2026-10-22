@@ -13,10 +13,15 @@ from datetime import datetime, timedelta, timezone
 import os
 import logging
 import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock, Thread
+import zipfile
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from google.transit import gtfs_realtime_pb2
 from gtfs_static import load_gtfs
+from scripts.build_gtfs_subset import build_subset
 import history_store
 
 # Pittsburgh timezone
@@ -67,8 +72,8 @@ def add_security_headers(response):
 
 # Configuration - from environment variables
 PAAC_API_KEY = os.environ.get("PAAC_API_KEY", "")
-TRUETIME_BASE_URL = "https://truetime.portauthority.org/bustime/api/v3"
-GTFSRT_TRIPS_URL = "https://truetime.portauthority.org/gtfsrt-bus/trips"
+TRUETIME_BASE_URL = "https://truetime.rideprt.org/bustime/api/v3"
+GTFSRT_TRIPS_URL = "https://truetime.rideprt.org/gtfsrt-bus/trips"
 TRUETIME_STOPS_URL = f"{TRUETIME_BASE_URL}/getstops"
 API_PORT = int(os.environ.get("API_PORT", 5001))
 STOP_METADATA_CACHE_TTL = 3600
@@ -79,13 +84,16 @@ UPSTREAM_TIMEOUT = (3, 5)
 _gtfsrt_feed_cache = {"expires_at": 0, "feed": None}
 STATIC_GTFS = load_gtfs()
 
-# Optional automatic static-schedule refresh. Off unless a feed URL is
-# configured, since we won't guess PRT's download URL for you - grab the
-# current one from https://www.rideprt.org/business-center/developer-resources/
-GTFS_STATIC_FEED_URL = os.environ.get("GTFS_STATIC_FEED_URL", "")
+# Official download linked by PRT's developer resources page, checked Oct 18, 2026.
+# An explicitly empty environment variable disables automatic refresh.
+GTFS_STATIC_FEED_URL = os.environ.get(
+    "GTFS_STATIC_FEED_URL",
+    "https://rideprt.org/contentassets/1bda11b1f5f1408d8e8f99db6d5ebe75/gtfs.zip",
+)
 GTFS_REFRESH_CHECK_INTERVAL = 24 * 60 * 60  # look for a newer feed once a day
 GTFS_EXPIRY_WARNING_DAYS = 14
-_gtfs_refresh_state = {"checked_at": 0}
+_gtfs_refresh_state = {"checked_at": 0, "status": "not_checked", "running": False}
+_gtfs_refresh_lock = Lock()
 
 # A scheduled-only trip more than this far out isn't a useful arrival card -
 # the service_status message covers "next bus" beyond this window instead.
@@ -645,6 +653,23 @@ def _arrival_direction(stop_id, trip_id, stop_directions, direction_id=None):
     return trip_direction if trip_direction in choices else None
 
 
+def _gtfs_trip_direction_id(update):
+    """New schedule trip IDs may lack direction IDs; use unambiguous stop evidence."""
+    if update.trip.HasField("direction_id"):
+        return update.trip.direction_id
+    directions = set()
+    for stop_time in update.stop_time_update:
+        if stop_time.stop_id in STOP_ID_TO_KEY:
+            served = _get_stop_directions(stop_time.stop_id)
+            if len(served) == 1:
+                directions.add(served[0])
+    if len(directions) == 1:
+        return {"to_west_view": 0, "to_downtown": 1}[directions.pop()]
+    if directions:
+        return None  # Conflicting physical stops must not become a guessed direction.
+    return STATIC_GTFS.trip_direction(update.trip.trip_id)
+
+
 def get_predictions_gtfsrt(route=None, stop=None):
     """Fetch predictions from GTFS-Realtime TripUpdates feed (FALLBACK).
 
@@ -689,11 +714,15 @@ def get_predictions_gtfsrt(route=None, stop=None):
             if trip.route_id != route:
                 continue
 
+            direction_id = _gtfs_trip_direction_id(entity.trip_update)
+
             # Check each stop time update for our stops
             for stu in entity.trip_update.stop_time_update:
                 stop_id = stu.stop_id
 
                 if stop_id not in requested_stop_ids:
+                    continue
+                if len(stop_directions[stop_id]) > 1 and direction_id is None:
                     continue
 
                 if stu.schedule_relationship in (
@@ -756,7 +785,7 @@ def get_predictions_gtfsrt(route=None, stop=None):
 
                 direction_key = _arrival_direction(
                     stop_id, trip.trip_id, stop_directions,
-                    trip.direction_id if trip.HasField('direction_id') else None,
+                    direction_id,
                 )
                 if direction_key == "to_west_view":
                     outbound_arrivals.append(arrival_data)
@@ -784,6 +813,7 @@ def get_predictions_gtfsrt(route=None, stop=None):
             "route": route,
             "last_updated": now_label,
             "data_source": "gtfs-rt",
+            "trip_updates_available": any(entity.HasField("trip_update") for entity in feed.entity),
             "source_age_seconds": feed_age_seconds,
             "is_live": bool(outbound_arrivals or inbound_arrivals),
             "expected_headway": headway,
@@ -1021,6 +1051,8 @@ def _live_source_state(data, fresh_data, configured=True):
         return "unavailable"
     if _has_arrivals(fresh_data):
         return "live"
+    if data.get("trip_updates_available") is False:
+        return "no_trip_updates"
     if any(a.get("is_live", data.get("is_live", False)) for d in data.get("predictions", {}).values() for a in d.get("arrivals", [])):
         return "stale"
     return "schedule_only" if _has_arrivals(data) else "no_predictions"
@@ -1130,62 +1162,80 @@ def _feed_expiry_status():
 
 
 def _maybe_refresh_static_gtfs():
-    """Opportunistically download a newer static feed, if one is configured.
-
-    We won't guess PRT's feed URL - set GTFS_STATIC_FEED_URL (see
-    https://www.rideprt.org/business-center/developer-resources/) to enable
-    this. The downloaded file is validated before it replaces the bundled
-    feed, so a bad download never breaks the running app.
-    """
-    global STATIC_GTFS
-
+    """Check at most daily without delaying arrivals or health checks."""
     if not GTFS_STATIC_FEED_URL:
         return
+    with _gtfs_refresh_lock:
+        now = time.time()
+        if _gtfs_refresh_state["running"] or now - _gtfs_refresh_state["checked_at"] < GTFS_REFRESH_CHECK_INTERVAL:
+            return
+        _gtfs_refresh_state.update(checked_at=now, status="checking", running=True)
+        Thread(target=_refresh_static_gtfs, daemon=True).start()
 
-    now = time.time()
-    if now - _gtfs_refresh_state["checked_at"] < GTFS_REFRESH_CHECK_INTERVAL:
-        return
-    _gtfs_refresh_state["checked_at"] = now
 
+def _refresh_static_gtfs():
+    """Validate and atomically install a small, currently usable schedule."""
+    global STATIC_GTFS
     try:
-        response = requests.get(GTFS_STATIC_FEED_URL, timeout=30)
-        response.raise_for_status()
-
         archive_path = STATIC_GTFS.archive_path
-        temp_path = archive_path.with_suffix(".tmp")
-        temp_path.write_bytes(response.content)
-
-        candidate = load_gtfs.__wrapped__(temp_path)
-        if not candidate.available:
-            logger.warning("Downloaded GTFS feed failed validation: %s", candidate.error)
-            temp_path.unlink(missing_ok=True)
-            return
-
-        today = datetime.now(EASTERN_TZ).date()
-        if candidate.valid_through and candidate.valid_through < today:
-            logger.warning("Downloaded GTFS feed is already expired; keeping the current one")
-            temp_path.unlink(missing_ok=True)
-            return
-
-        temp_path.replace(archive_path)
-        load_gtfs.cache_clear()
-        STATIC_GTFS = load_gtfs()
-        logger.info("Refreshed static GTFS feed, valid through %s", STATIC_GTFS.valid_through)
-    except (requests.RequestException, OSError) as error:
+        with TemporaryDirectory(dir=archive_path.parent) as temp_dir:
+            download_path = Path(temp_dir) / "download.zip"
+            with requests.get(GTFS_STATIC_FEED_URL, timeout=(3, 30), stream=True) as response:
+                response.raise_for_status()
+                size = 0
+                with download_path.open("wb") as handle:
+                    for chunk in response.iter_content(65536):
+                        size += len(chunk)
+                        if size > 64 * 1024 * 1024:
+                            raise ValueError("GTFS download exceeds 64 MB")
+                        handle.write(chunk)
+            with zipfile.ZipFile(download_path) as archive:
+                if sum(info.file_size for info in archive.infolist()) > 512 * 1024 * 1024:
+                    raise ValueError("Uncompressed GTFS archive exceeds 512 MB")
+            temp_path = Path(temp_dir) / "subset.zip"
+            build_subset(download_path, temp_path, set(VALID_ROUTES))
+            candidate = load_gtfs.__wrapped__(temp_path)
+            today = datetime.now(EASTERN_TZ).date()
+            if not candidate.available or not candidate.valid_from or not candidate.valid_through:
+                raise ValueError("Downloaded GTFS feed is missing valid schedule data or dates")
+            if candidate.valid_through < today:
+                _gtfs_refresh_state["status"] = "upstream_expired"
+                return
+            if candidate.valid_from > today:
+                _gtfs_refresh_state["status"] = "not_yet_effective"
+                return
+            if STATIC_GTFS.valid_through and candidate.valid_through < STATIC_GTFS.valid_through:
+                raise ValueError("Downloaded GTFS feed would shorten current coverage")
+            if not all(candidate.departures.get(pair) for pair in (("8", "619"), ("13", "1009"), ("13", "1016"))):
+                raise ValueError("Downloaded GTFS feed is missing tracked routes or stops")
+            if not all(candidate.next_departure(route, stop, datetime.now(EASTERN_TZ))
+                       for route, stop in (("8", "619"), ("13", "1009"), ("13", "1016"))):
+                raise ValueError("Downloaded GTFS feed has no upcoming tracked service")
+            temp_path.replace(archive_path)
+            candidate.archive_path = archive_path
+            load_gtfs.cache_clear()
+            STATIC_GTFS = candidate
+            _gtfs_refresh_state["status"] = "updated"
+            logger.info("Refreshed static GTFS feed, valid through %s", candidate.valid_through)
+    except (requests.RequestException, OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+        _gtfs_refresh_state["status"] = "failed"
         logger.warning("Static GTFS refresh check failed: %s", error)
+    finally:
+        _gtfs_refresh_state["running"] = False
 
 
 @app.route("/health")
 def health():
-    _maybe_refresh_static_gtfs()
     expiry = _feed_expiry_status()
     return jsonify({
         "status": "healthy",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "live_tracking": {"truetime_configured": bool(PAAC_API_KEY), "gtfs_rt_enabled": True},
         "timestamp": datetime.now().isoformat(),
         "static_gtfs": {
             "available": STATIC_GTFS.available,
+            "refresh_status": _gtfs_refresh_state["status"],
+            "refresh_checked_at": _gtfs_refresh_state["checked_at"] or None,
             **expiry,
         },
     })
@@ -1257,6 +1307,8 @@ def _build_predictions_payload(route, requested_stop):
             )
         }, 400
 
+    _maybe_refresh_static_gtfs()
+
     # All stops use paired logic to fetch both directions
     paired = PAIRED_STOPS[stop]
     outbound_stop = paired["outbound"]
@@ -1300,7 +1352,7 @@ def _build_predictions_payload(route, requested_stop):
     data_sources = list(dict.fromkeys(
         data.get("data_source") for data in active_data if data.get("data_source")
     ))
-    data_source = "+".join(data_sources) if data_sources else "unavailable"
+    data_source = "+".join(data_sources) if any(_has_arrivals(data) for data in active_data) else "unavailable"
     is_live = any(data.get("is_live", False) for data in active_data)
     feed_valid_through = next(
         (data.get("feed_valid_through") for data in active_data if data.get("feed_valid_through")),

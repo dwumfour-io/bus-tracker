@@ -2,16 +2,28 @@
 """Build a small, standard GTFS archive for the routes used by the app."""
 
 import argparse
+from contextlib import contextmanager
 import csv
 import io
 from pathlib import Path
 import zipfile
 
 
-def read_rows(source_dir, filename):
-    path = source_dir / filename
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        return list(csv.DictReader(handle))
+@contextmanager
+def open_table(source, filename):
+    if source.is_dir():
+        with (source / filename).open(newline="", encoding="utf-8-sig") as handle:
+            yield handle
+    else:
+        with zipfile.ZipFile(source) as archive, archive.open(filename) as raw:
+            with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as handle:
+                yield handle
+
+
+def read_rows(source, filename):
+    # Stream the full agency stop_times table; retain only the selected routes.
+    with open_table(source, filename) as handle:
+        yield from csv.DictReader(handle)
 
 
 def write_rows(archive, filename, rows, fieldnames):
@@ -23,8 +35,7 @@ def write_rows(archive, filename, rows, fieldnames):
 
 
 def fieldnames(source_dir, filename):
-    path = source_dir / filename
-    with path.open(newline="", encoding="utf-8-sig") as handle:
+    with open_table(source_dir, filename) as handle:
         return csv.DictReader(handle).fieldnames
 
 
@@ -72,7 +83,7 @@ def build_subset(source_dir, output_path, route_ids):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("source_dir", type=Path, help="Directory containing the PRT GTFS text files")
+    parser.add_argument("source_dir", type=Path, help="PRT GTFS ZIP or directory of GTFS text files")
     parser.add_argument(
         "--output",
         type=Path,

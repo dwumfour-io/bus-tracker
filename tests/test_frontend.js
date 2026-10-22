@@ -60,6 +60,25 @@ test('West View respects Route 13 instead of requesting both routes', async () =
     assert.equal(context.rendered[0].route, '13');
 });
 
+test('official timetable follows both explicit and automatic route selection', () => {
+    const { run, elements } = setup();
+    for (const route of ['13', '8', '13']) {
+        run(`currentRoute = '${route}'; updateScheduleLink();`);
+        assert.match(elements.get('official-schedule').href, new RegExp(`/${route}_EFF_10.18.26.pdf$`));
+        assert.equal(elements.get('official-schedule').textContent, `Route ${route} timetable (PDF)`);
+    }
+});
+
+test('empty upstream trip feed explains missing tracking without claiming canceled service', () => {
+    const { run, context, elements } = setup();
+    context.sample = payload();
+    context.sample.directions = ['to_west_view'];
+    context.sample.live_sources = { 'gtfs-rt': 'no_trip_updates' };
+    run('updateLiveStatus(sample)');
+    assert.match(elements.get('live-status-banner').textContent, /without bus trip updates/);
+    assert.match(elements.get('live-status-banner').textContent, /does not mean service is canceled/);
+});
+
 test('an old Route 8 response cannot overwrite a new Route 13 selection', async () => {
     const { run, pending, context } = setup();
     run('currentStop = "westview"; currentRoute = "8";');

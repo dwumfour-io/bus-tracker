@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=1.1.0">
+    <link rel="stylesheet" href="style.css?v=1.4.0">
 </head>
 <body>
     <!-- Header -->
@@ -80,6 +80,10 @@
         <!-- Static schedule expiry warning -->
         <div id="live-status-banner" class="feed-expiry-banner" hidden role="status"></div>
         <div id="feed-expiry-banner" class="feed-expiry-banner" style="display: none;" role="alert"></div>
+        <nav class="schedule-links" aria-label="Official PRT schedules">
+            <a id="official-schedule" href="https://rideprt.org/globalassets/future-service-update-schedules/oct-2026/13_EFF_10.18.26.pdf" target="_blank" rel="noopener">Route 13 timetable (PDF)</a>
+            <a href="https://rideprt.org/service-alerts-and-updates/serviceupdates/" target="_blank" rel="noopener">October 18 service changes</a>
+        </nav>
 
         <!-- Service Alerts Banner -->
         <div id="alerts-container" class="alerts-container" style="display: none;">
@@ -182,7 +186,7 @@
                     <ul>
                         <li>TrueTime API (Primary)</li>
                         <li>GTFS-RT Feed (Secondary)</li>
-                        <li>Mock Data (Demo/Testing)</li>
+                        <li>Official PRT schedule (when current)</li>
                     </ul>
                 </div>
                 <div class="info-item">
@@ -209,6 +213,6 @@
         </div>
     </footer>
 
-    <script src="app.js?v=1.3.0"></script>
+    <script src="app.js?v=1.4.0"></script>
 </body>
 </html>

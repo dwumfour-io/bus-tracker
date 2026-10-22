@@ -220,6 +220,14 @@ function initializeRouteSelector() {
     });
 }
 
+function updateScheduleLink() {
+    const link = document.getElementById('official-schedule');
+    if (!link) return;
+    const route = currentRoute === '8' ? '8' : '13';
+    link.href = `https://rideprt.org/globalassets/future-service-update-schedules/oct-2026/${route}_EFF_10.18.26.pdf`;
+    link.textContent = `Route ${route} timetable (PDF)`;
+}
+
 // Stop selector functionality
 function initializeStopSelector() {
     const stopSelect = document.getElementById('stop-select');
@@ -359,6 +367,7 @@ function stopAutoRefresh() {
 
 // Fetch predictions from API
 async function fetchPredictions() {
+    updateScheduleLink();
     const requestId = ++predictionRequestId;
     if (predictionController) predictionController.abort();
     const route = currentRoute;
@@ -451,7 +460,8 @@ function updateDataSource(source, isLive) {
     const sourceText = {
         'truetime': 'TrueTime API',
         'gtfs-rt': 'GTFS-RT Feed',
-        'gtfs-static': 'PRT schedule'
+        'gtfs-static': 'PRT schedule',
+        'unavailable': 'Unavailable'
     };
 
     sourceElement.textContent = source
@@ -460,7 +470,7 @@ function updateDataSource(source, isLive) {
         .join(' + ');
 
     if (!isLive) {
-        sourceElement.style.color = 'var(--warning)';
+        sourceElement.style.color = '#9A6700';
     } else {
         sourceElement.style.color = 'var(--success)';
     }
@@ -524,6 +534,8 @@ function updateLiveStatus(data) {
     let reason = 'PRT has no current live prediction for this stop and direction.';
     if (sources['gtfs-rt'] === 'unavailable') {
         reason = 'The live feed could not be reached.';
+    } else if (sources['gtfs-rt'] === 'no_trip_updates') {
+        reason = 'PRT\'s live feed is responding without bus trip updates. This does not mean service is canceled.';
     } else if (live.length || Object.values(sources).includes('stale')) {
         reason = 'The last live prediction is too old to rely on.';
     }
@@ -555,8 +567,8 @@ function updateFeedExpiryBanner(feedExpiry) {
     }
 
     banner.textContent = feedExpiry.expired
-        ? `⚠️ The bundled PRT schedule expired ${feedExpiry.valid_through}. Scheduled-only arrivals may be wrong until it's updated.`
-        : `ℹ️ The bundled PRT schedule expires ${feedExpiry.valid_through}. It will need to be refreshed soon.`;
+        ? `The downloaded PRT schedule expired ${feedExpiry.valid_through}. Its arrival times are unavailable. Check the official timetable below; a current data file will be loaded when available.`
+        : `The downloaded PRT schedule expires ${feedExpiry.valid_through}. An updated data file is checked daily.`;
     banner.style.display = 'block';
 }
 

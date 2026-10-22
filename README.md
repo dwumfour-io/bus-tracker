@@ -43,7 +43,7 @@ STOP_ID=1016
 BUS_ROUTE=13
 ```
 
-Get your API key at [truetime.portauthority.org](https://truetime.portauthority.org/)
+Get your API key at [truetime.rideprt.org](https://truetime.rideprt.org/)
 
 ### 3. Run the API Server
 
@@ -228,11 +228,11 @@ bus-tracker/
 | `API_PORT` | Server port | 5001 |
 | `FLASK_DEBUG` | Enable debug mode | false |
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated) | http://localhost:5001 |
-| `GTFS_STATIC_FEED_URL` | Direct URL to PRT's current static GTFS zip; when set, the app checks for a newer feed once a day and only swaps it in after validating the download | (empty; auto-refresh off) |
+| `GTFS_STATIC_FEED_URL` | Static GTFS ZIP checked daily in the background; an explicitly empty value disables refresh | Official PRT developer download |
 | `HISTORY_DB_PATH` | Where to store the prediction/observation history SQLite database | `data/history.db` |
 
-Get the current static feed URL from [PRT's developer resources page](https://www.rideprt.org/business-center/developer-resources/) -
-we don't hardcode it since PRT can change it without notice.
+The default static feed URL was verified against [PRT's developer resources page](https://rideprt.org/business-resources/web-developer-resources/)
+on October 18, 2026. Override it if PRT changes the download location.
 
 ## Live Tracking Troubleshooting
 
@@ -241,7 +241,8 @@ we don't hardcode it since PRT can change it without notice.
   the key is valid. GTFS-Realtime works without a TrueTime key.
 - `/predictions?route=13&stop=1009` includes `live_sources`. Each source can report
   `live`, `no_predictions`, `schedule_only`, `stale`, `unavailable`,
-  `not_configured`, or `not_needed`.
+  `no_trip_updates`, `not_configured`, or `not_needed`. `no_trip_updates` means
+  the agency feed has no TripUpdate records, not that a specific bus is canceled.
 - Scheduled-only or stale TrueTime results no longer block GTFS-Realtime.
   The app checks missing directions separately and excludes live predictions
   older than 90 seconds before adding clearly labeled scheduled times.
@@ -249,22 +250,49 @@ we don't hardcode it since PRT can change it without notice.
   counting between 30-second network refreshes; scheduled times are not live ETAs.
 - At West View Plaza, incoming buses and downtown departures are displayed
   separately. An incoming bus is not automatically a departure prediction.
+- For new GTFS trip IDs without direction IDs, unambiguous one-direction
+  stops in the same update can establish the direction at West View. Conflicting
+  evidence is not guessed.
 - After deploying, reopen the tracker to load the updated service worker.
 
 ## Updating the Static GTFS Feed
 
-Download and extract PRT's current static feed, then rebuild the small archive
+Download PRT's current static feed, then rebuild the small archive
 used by the app:
 
 ```bash
-python scripts/build_gtfs_subset.py /path/to/GTFS \
+python scripts/build_gtfs_subset.py /path/to/GTFS.zip \
   --output gtfs/google_transit.zip --routes 8 13
 ```
 
-The bundled feed currently covers `2026-06-28` through `2026-10-14`. Rebuild it
-when PRT publishes a new schedule so scheduled fallback times remain current.
-Set `GTFS_STATIC_FEED_URL` to have the app check for and validate a newer feed
-automatically once a day instead.
+The bundled feed covers `2026-06-28` through `2026-10-14`. On October 18, the
+official download and the WPRDC archive still contained that expired version,
+even though [new Route 8 and Route 13 timetables](https://rideprt.org/service-alerts-and-updates/serviceupdates/)
+took effect that day. The tracker links to the new PDFs but does not invent
+stop-level times from them or extend the old schedule's expiry.
+
+The first arrivals request starts a background download, at most once daily
+per process. Only Routes 8 and 13 are retained. Invalid, expired, future-only,
+or incomplete downloads leave the existing archive untouched. `/health` does
+not trigger network requests and reports `static_gtfs.refresh_status` and
+`refresh_checked_at`. A replacement on Render's ephemeral filesystem is
+checked again after redeploy; the bundled archive should still be refreshed
+in Git when a valid official feed is published.
+
+PRT also announced [October 17-18 technology maintenance](https://rideprt.org/newsroom/news-releases/planned-technology-maintenance-saturday-october-17-sunday-october-18--pittsburgh-regional-transit/)
+affecting TrueTime and third-party apps. On October 18 the bus TripUpdate
+endpoint responded with shapes but no TripUpdates. This is an upstream data
+gap; a successful HTTP response does not guarantee live predictions.
+On October 22, TripUpdates were present again and Route 8 had live predictions
+at West View, but the official static download still expired October 14.
+
+### Mobile Layout Check
+
+With Playwright installed and the local server running, execute
+`node scripts/check_mobile_layout.cjs`. It checks 320, 375, 390, 430, 768,
+1024 and 1440 pixel widths across live, scheduled, stale, unavailable and error states,
+plus route and direction changes. Set `TRACKER_URL`, `CHROME_PATH` and
+`SCREENSHOT_DIR` to override the local URL, browser executable and image folder.
 
 ## 📊 Trip History
 

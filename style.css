@@ -75,6 +75,7 @@ body {
     display: flex;
     align-items: center;
     gap: 12px;
+    min-width: 0;
 }
 
 .bus-icon {
@@ -147,6 +148,8 @@ body {
 
 .stop-icon {
     font-size: 1.25rem;
+    align-self: flex-start;
+    padding-top: 8px;
 }
 
 .stop-dropdown {
@@ -217,9 +220,10 @@ body {
 }
 
 /* Main Content */
-main {
+main.container {
     flex: 1;
-    padding: 32px 0;
+    padding-top: 24px;
+    padding-bottom: 32px;
 }
 
 /* Status Bar */
@@ -240,6 +244,7 @@ main {
     flex-direction: column;
     align-items: center;
     gap: 4px;
+    min-width: 0;
 }
 
 .status-label {
@@ -252,6 +257,7 @@ main {
     font-size: 1rem;
     font-weight: 700;
     color: var(--navy);
+    overflow-wrap: anywhere;
 }
 
 .status-value.live {
@@ -380,6 +386,27 @@ main {
     font-weight: 500;
 }
 
+.schedule-links {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin-bottom: 24px;
+    font-size: 0.95rem;
+}
+
+.schedule-links a {
+    color: #006872;
+    text-underline-offset: 3px;
+    padding: 8px 0;
+    overflow-wrap: anywhere;
+}
+
+.direction-section {
+    min-width: 0;
+    container-type: inline-size;
+}
+
 /* Tabs */
 .tabs {
     display: flex;
@@ -498,7 +525,7 @@ main {
     box-shadow: var(--box-shadow);
     transition: all 0.3s;
     display: grid;
-    grid-template-columns: 100px 1fr auto;
+    grid-template-columns: 80px minmax(0, 1fr) auto;
     gap: 20px;
     align-items: center;
     min-height: 80px;
@@ -564,6 +591,11 @@ main {
     margin-bottom: 4px;
 }
 
+.arrival-info {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
 .arrival-time {
     color: var(--gray-dark);
     font-size: 0.95rem;
@@ -574,7 +606,8 @@ main {
     border-radius: var(--border-radius);
     font-weight: 600;
     font-size: 0.875rem;
-    white-space: nowrap;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .status-badge.on-time {
@@ -615,7 +648,7 @@ main {
 }
 
 .terminus-card .terminus-icon {
-    width: 100px;
+    width: 100%;
     text-align: center;
 }
 
@@ -635,7 +668,7 @@ main {
 }
 
 .schedule-card .schedule-icon {
-    width: 100px;
+    width: 100%;
     text-align: center;
 }
 
@@ -846,7 +879,7 @@ main {
     .stop-icon {
         grid-column: 1;
         grid-row: 1;
-        align-self: center;
+        align-self: start;
         text-align: center;
     }
 
@@ -881,6 +914,16 @@ main {
     .status-item {
         flex-direction: row;
         justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+    }
+
+    .status-label {
+        flex-shrink: 0;
+    }
+
+    .status-value {
+        text-align: right;
     }
 
     .controls {
@@ -905,7 +948,7 @@ main {
     }
 
     .arrival-card {
-        grid-template-columns: 80px 1fr;
+        grid-template-columns: 72px minmax(0, 1fr);
         gap: 16px;
     }
 
@@ -947,7 +990,7 @@ main {
     }
 
     .stop-dropdown {
-        font-size: 0.95rem;
+        font-size: 1rem;
         padding-left: 12px;
         padding-right: 32px;
     }
@@ -958,19 +1001,35 @@ main {
     }
 
     .arrival-card {
-        grid-template-columns: 1fr;
-        text-align: center;
+        grid-template-columns: 64px minmax(0, 1fr);
+        padding: 16px 12px;
+        gap: 8px 12px;
     }
 
-    .minutes-display {
-        padding-bottom: 12px;
-        border-bottom: 2px solid var(--gray-light);
+    .logo {
+        width: 100%;
     }
 
-    .arrival-info {
-        padding-bottom: 12px;
-        border-bottom: 2px solid var(--gray-light);
+    .info-section {
+        padding: 24px 16px;
     }
+}
+
+/* A direction can be narrow in a two-column desktop view too. */
+@container (max-width: 540px) {
+    .arrival-card {
+        grid-template-columns: 64px minmax(0, 1fr);
+        gap: 8px 12px;
+    }
+
+    .arrival-card .status-badge {
+        grid-column: 2;
+        justify-self: start;
+    }
+}
+
+.info-item code {
+    overflow-wrap: anywhere;
 }
 
 /* Service Alerts */

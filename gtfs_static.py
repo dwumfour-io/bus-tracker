@@ -194,9 +194,11 @@ class GTFSStaticData:
         candidates = []
         for day_offset in (-1, 0, 1):
             service_date = predicted.date() + timedelta(days=day_offset)
+            if not self._service_active(record["service_id"], service_date):
+                continue
             scheduled = self._scheduled_datetime(service_date, record["time"], predicted.tzinfo)
             candidates.append(scheduled)
-        return min(candidates, key=lambda value: abs((value - predicted).total_seconds()))
+        return min(candidates, key=lambda value: abs((value - predicted).total_seconds()), default=None)
 
 
 @lru_cache(maxsize=1)

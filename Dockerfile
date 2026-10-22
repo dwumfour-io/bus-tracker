@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api.py .
 COPY gtfs_static.py .
 COPY history_store.py .
+COPY scripts ./scripts
 COPY gtfs ./gtfs
 COPY index.html .
 COPY app.js .

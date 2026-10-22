@@ -225,6 +225,57 @@ def test_distinct_scheduled_trip_is_not_hidden_by_nearby_live_bus():
 def test_health_reports_key_presence_without_exposing_it(monkeypatch):
     monkeypatch.setattr(api, "PAAC_API_KEY", "never-return-this-key")
     result = api.app.test_client().get("/health")
-    assert result.json["version"] == "1.3.0"
+    assert result.json["version"] == "1.4.0"
     assert result.json["live_tracking"]["truetime_configured"] is True
     assert "never-return-this-key" not in result.get_data(as_text=True)
+
+
+def test_feed_without_trip_updates_is_not_a_stop_specific_no_prediction(now, monkeypatch):
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.header.gtfs_realtime_version = "2.0"
+    feed.header.timestamp = int(now.timestamp())
+    feed.entity.add().id = "shape-only"
+    monkeypatch.setattr(api, "_get_gtfsrt_feed", lambda: feed)
+    data = api.get_predictions_gtfsrt("13", "1009")
+    assert api._live_source_state(data, api._fresh_live_data(data)) == "no_trip_updates"
+    assert not data["is_live"]
+
+
+def test_current_feed_with_no_matching_stop_remains_no_predictions(now, monkeypatch):
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.header.gtfs_realtime_version = "2.0"
+    feed.header.timestamp = int(now.timestamp())
+    entity = feed.entity.add()
+    entity.id = "other-route"
+    entity.trip_update.trip.route_id = "8"
+    monkeypatch.setattr(api, "_get_gtfsrt_feed", lambda: feed)
+    data = api.get_predictions_gtfsrt("13", "1009")
+    assert api._live_source_state(data, api._fresh_live_data(data)) == "no_predictions"
+
+
+@pytest.mark.parametrize("direction_stop,expected", [("733", "to_downtown"), ("618", "to_west_view")])
+def test_new_trip_at_westview_uses_unambiguous_physical_stop_direction(now, monkeypatch, direction_stop, expected):
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.header.gtfs_realtime_version = "2.0"
+    feed.header.timestamp = int(now.timestamp())
+    entity = feed.entity.add()
+    entity.id = "new-trip"
+    entity.trip_update.trip.trip_id = "new-october-trip"
+    entity.trip_update.trip.route_id = "8"
+    for stop_id in ("619", direction_stop):
+        stop = entity.trip_update.stop_time_update.add()
+        stop.stop_id = stop_id
+        stop.arrival.time = int(now.timestamp()) + 300
+    monkeypatch.setattr(api, "_get_gtfsrt_feed", lambda: feed)
+    data = api.get_predictions_gtfsrt("8", "619")
+    arrival, = data["predictions"][expected]["arrivals"]
+    assert arrival["route"] == "8"
+    assert arrival["is_live"] is True
+
+
+def test_unknown_trip_with_conflicting_direction_evidence_is_not_guessed():
+    update = gtfs_realtime_pb2.TripUpdate()
+    update.trip.trip_id = "unknown"
+    for stop in ("619", "618", "733"):
+        update.stop_time_update.add().stop_id = stop
+    assert api._gtfs_trip_direction_id(update) is None
